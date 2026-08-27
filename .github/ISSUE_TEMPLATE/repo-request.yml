@@ -1,0 +1,63 @@
+name: "New Repository Request"
+description: "Request a new repository for your application"
+title: "[REPO REQUEST] "
+labels:
+  - repo-request
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🚀 New Repository Request
+        Please fill in the details below. Once submitted, an automated pipeline will create your repository.
+
+  - type: input
+    id: repo_name
+    attributes:
+      label: "Repository Name"
+      description: "The name for the new repository (lowercase, hyphens allowed, no spaces)"
+      placeholder: "my-new-app"
+    validations:
+      required: true
+
+  - type: input
+    id: repo_org
+    attributes:
+      label: "Organization"
+      description: "The GitHub organization where the repository should be created"
+      placeholder: "my-org"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: app_type
+    attributes:
+      label: "Application Type"
+      description: "Select the type of application you are building"
+      options:
+        - dotnet
+        - java
+        - python
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: groups
+    attributes:
+      label: "Permission Groups"
+      description: "Select the groups that need access to this repository"
+      options:
+        - label: devops
+        - label: engineers
+        - label: admins
+        - label: qa
+    validations:
+      required: true
+
+  - type: textarea
+    id: repo_description
+    attributes:
+      label: "Repository Description"
+      description: "A brief description of the application and its purpose"
+      placeholder: "This application provides..."
+    validations:
+      required: true
