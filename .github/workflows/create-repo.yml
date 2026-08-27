@@ -8,6 +8,11 @@ jobs:
   create-repo:
     if: github.event.label.name == 'repo-request'
     runs-on: ubuntu-latest
+    # Serializes repeated labelling of the same issue so two runs cannot both pass
+    # the existence check. Collisions between different issues are still open (T2.2).
+    concurrency:
+      group: create-repo-${{ github.event.issue.number }}
+      cancel-in-progress: false
     permissions:
       issues: write
       contents: read
@@ -96,42 +101,110 @@ jobs:
         run: exit 1
 
       # ------------------------------------------------------------------ #
-      #  4. Create the new repository                                       #
+      #  4. Reject the request if the target already exists                 #
       # ------------------------------------------------------------------ #
-      - name: Create repository
-        id: create
+      - name: Check target repository availability
+        id: target
         env:
           GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
           REPO_NAME: ${{ steps.request.outputs.repo_name }}
           OWNER_TYPE: ${{ steps.request.outputs.owner_type }}
           ORGANIZATION: ${{ steps.request.outputs.organization }}
-          DESCRIPTION: ${{ steps.request.outputs.description }}
         run: |
           if [ "$OWNER_TYPE" = "organization" ]; then
             TARGET_OWNER="$ORGANIZATION"
           else
             # 'None' was requested, so the repository is owned by the token's account.
             TARGET_OWNER="$(gh api user --jq .login)"
-            echo "No organization requested. Creating under the personal account '$TARGET_OWNER'."
+            echo "No organization requested. Target owner is the personal account '$TARGET_OWNER'."
           fi
 
+          set +e
+          RESPONSE="$(gh api "repos/$TARGET_OWNER/$REPO_NAME" 2>&1)"
+          STATUS=$?
+          set -e
+
+          if [ "$STATUS" -eq 0 ]; then
+            EXISTS=true
+          elif echo "$RESPONSE" | grep -q "HTTP 404"; then
+            EXISTS=false
+          else
+            # A permissions or transport error must not be read as "available".
+            echo "::error::Could not determine whether $TARGET_OWNER/$REPO_NAME exists: $RESPONSE"
+            exit 1
+          fi
+
+          echo "Target $TARGET_OWNER/$REPO_NAME exists: $EXISTS"
+
+          {
+            echo "target_owner=$TARGET_OWNER"
+            echo "exists=$EXISTS"
+            echo "repo_url=https://github.com/$TARGET_OWNER/$REPO_NAME"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment that the repository already exists
+        if: steps.target.outputs.exists == 'true'
+        uses: actions/github-script@v7
+        env:
+          REPO_NAME: ${{ steps.request.outputs.repo_name }}
+          TARGET_OWNER: ${{ steps.target.outputs.target_owner }}
+          REPO_URL: ${{ steps.target.outputs.repo_url }}
+        with:
+          script: |
+            const { REPO_NAME, TARGET_OWNER, REPO_URL } = process.env;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                '## ❌ Repository Request Rejected — Name Already Taken',
+                '',
+                `\`${TARGET_OWNER}/${REPO_NAME}\` already exists: ${REPO_URL}`,
+                '',
+                'Nothing was created or changed. This request is rejected rather than reused, because',
+                'pushing a scaffold into an existing repository could overwrite work that is already there.',
+                '',
+                '**To continue, do one of the following:**',
+                '',
+                `1. Edit this issue with a different **Repository Name**, then re-apply the \`repo-request\` label.`,
+                `2. If \`${REPO_NAME}\` is already your project, no action is needed — use the existing repository.`,
+                `3. If the existing repository is unwanted, ask an owner of \`${TARGET_OWNER}\` to delete or rename it, then re-apply the label.`,
+                '',
+                `[View workflow run](${runUrl})`,
+              ].join('\n'),
+            });
+
+      - name: Fail on existing repository
+        if: steps.target.outputs.exists == 'true'
+        run: |
+          echo "::error::Repository already exists. Request rejected without changes."
+          exit 1
+
+      # ------------------------------------------------------------------ #
+      #  5. Create the new repository                                       #
+      # ------------------------------------------------------------------ #
+      - name: Create repository
+        id: create
+        env:
+          GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
+          REPO_NAME: ${{ steps.request.outputs.repo_name }}
+          TARGET_OWNER: ${{ steps.target.outputs.target_owner }}
+          DESCRIPTION: ${{ steps.request.outputs.description }}
+        run: |
           gh repo create "$TARGET_OWNER/$REPO_NAME" \
             --private \
             --description "$DESCRIPTION"
 
-          {
-            echo "target_owner=$TARGET_OWNER"
-            echo "repo_url=https://github.com/$TARGET_OWNER/$REPO_NAME"
-          } >> "$GITHUB_OUTPUT"
-
       # ------------------------------------------------------------------ #
-      #  5. Push scaffold template                                          #
+      #  6. Push scaffold template                                          #
       # ------------------------------------------------------------------ #
       - name: Push scaffold template
         env:
           GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
           REPO_NAME: ${{ steps.request.outputs.repo_name }}
-          TARGET_OWNER: ${{ steps.create.outputs.target_owner }}
+          TARGET_OWNER: ${{ steps.target.outputs.target_owner }}
           APP_TYPE: ${{ steps.request.outputs.app_type }}
         run: |
           # Clone the newly created empty repo
@@ -150,7 +223,7 @@ jobs:
           git push origin HEAD:main
 
       # ------------------------------------------------------------------ #
-      #  6. Assign team permissions                                         #
+      #  7. Assign team permissions                                         #
       # ------------------------------------------------------------------ #
       - name: Assign team permissions
         if: steps.request.outputs.owner_type == 'organization'
@@ -175,15 +248,15 @@ jobs:
           done
 
       # ------------------------------------------------------------------ #
-      #  7. Comment success and close the issue                             #
+      #  8. Comment success and close the issue                             #
       # ------------------------------------------------------------------ #
       - name: Comment success and close issue
         if: success()
         uses: actions/github-script@v7
         env:
-          REPO_URL: ${{ steps.create.outputs.repo_url }}
+          REPO_URL: ${{ steps.target.outputs.repo_url }}
           REPO_NAME: ${{ steps.request.outputs.repo_name }}
-          TARGET_OWNER: ${{ steps.create.outputs.target_owner }}
+          TARGET_OWNER: ${{ steps.target.outputs.target_owner }}
           OWNER_TYPE: ${{ steps.request.outputs.owner_type }}
           APP_TYPE: ${{ steps.request.outputs.app_type }}
           PERMISSION_GROUPS: ${{ steps.request.outputs.groups }}
@@ -224,10 +297,10 @@ jobs:
             });
 
       # ------------------------------------------------------------------ #
-      #  8. Comment failure                                                 #
+      #  9. Comment failure                                                 #
       # ------------------------------------------------------------------ #
       - name: Comment failure
-        if: failure() && steps.request.outputs.valid != 'false'
+        if: failure() && steps.request.outputs.valid != 'false' && steps.target.outputs.exists != 'true'
         uses: actions/github-script@v7
         with:
           script: |

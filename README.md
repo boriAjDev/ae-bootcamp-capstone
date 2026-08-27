@@ -45,6 +45,19 @@ breaks any rule below is rejected with a comment on the issue, and no repository
 comment, so the actual owner is always visible on the issue. Because GitHub teams only exist inside
 organizations, no team permissions are applied and permission groups are not required.
 
+### If the repository already exists
+
+The request is **rejected**. Before creating anything, the workflow checks whether the target already
+exists and stops if it does. Nothing is created, pushed, or modified, and the issue receives a comment
+naming the existing repository with the options for continuing.
+
+Existing repositories are never reused, because pushing a scaffold into one could overwrite work that
+is already there. To retry, edit the issue with a different repository name and re-apply the
+`repo-request` label.
+
+If the check cannot reach GitHub, or the token lacks access to answer the question, the run fails
+rather than assuming the name is free.
+
 ## Scaffold Templates
 
 | Type | Location | Includes |

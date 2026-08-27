@@ -50,10 +50,13 @@ This backlog implements [risk-remediation-plan.md](risk-remediation-plan.md). Ta
 
 ## 2. Idempotency, concurrency, and recovery
 
-- [ ] **T2.1 Decide the existing-repository policy.** Choose reuse, reject, or explicit repair behavior and document it for requesters and operators.
+- [x] **T2.1 Decide the existing-repository policy.** Choose reuse, reject, or explicit repair behavior and document it for requesters and operators.
   - Acceptance: the policy covers empty repositories, repositories with a scaffold, and repositories with unrelated content.
+  - Decision: **reject**. The workflow checks for the target before creating anything and stops if it exists, regardless of whether that repository is empty, already scaffolded, or holds unrelated content. Reuse was rejected because pushing a scaffold into an existing repository can overwrite real work. Documented under "If the repository already exists" in the README.
+  - The check distinguishes a 404 from a permissions or transport error, so an unreachable API fails the run instead of being read as "name is free".
 - [ ] **T2.2 Add concurrency protection.** Serialize runs by request identity and target organization/repository name.
   - Acceptance: simultaneous labels cannot provision the same target twice.
+  - Partial: the job now has a concurrency group keyed on the issue number, so re-labelling one issue cannot run twice concurrently. Two different issues requesting the same target can still race, which needs the target-keyed grouping described in the task.
 - [ ] **T2.3 Separate create, scaffold, and permissions status.** Persist or report which stages completed so partial runs are diagnosable.
   - Acceptance: a failure identifies the completed stage and the safe next action.
 - [ ] **T2.4 Make scaffold push retryable.** Avoid destructive copying and ensure a retry cannot overwrite unrelated repository content.
