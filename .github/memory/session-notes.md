@@ -141,3 +141,24 @@ Start with T0.1-T0.4: add workflow validation, fixture the parser behavior, add 
 
 ### Still open
 Team assignment still swallows individual failures with `|| echo Warning`, so a run can report success when a team was not assigned. That is T3.2 and is deliberately untouched here.
+
+---
+
+## Session 7 — Phase 3 Permission Correctness
+
+**Date**: 2026-08-27
+**Summary**: Implemented T3.1-T3.4 on `feature/phase-3-permission-correctness`, branched from `main` after PR #5 merged. Permissions are now part of the success contract.
+
+### What Changed
+- **T3.1** A pre-flight step checks every requested team exists in the organization **before** the repository is created. A missing team rejects the request while there is nothing to clean up, and the comment names the missing teams.
+- **T3.2** The `|| echo "Warning..."` fallback is gone. Assignment runs in `actions/github-script`, so any API error fails the step. This was the same failure shape as the `GROUPS` bug: an error path that reported success.
+- **T3.3** After assigning, the workflow reads back each team's effective `role_name` and compares it with what was requested. Missing or mismatched access fails the run and the failure comment lists exactly what was not applied.
+- **T3.4** README records a rationale per group and the reasoning for `devops` being `maintain` rather than `admin`.
+
+### Design Notes
+- New `scripts/team-permissions.js` holds only the pure comparison logic, so the success contract is unit tested without API calls. 7 new tests, 46 total.
+- Over-permissioning counts as a mismatch: a team granted `admin` when `push` was requested fails verification rather than passing because "at least" the access exists.
+- The failure comment now distinguishes a permissions failure from other partial failures, because the recovery differs — do not delete the repository, grant the access instead.
+
+### Residual
+Mapping owner and security sign-off in the README are still placeholders, along with the credential owner from T1.6.

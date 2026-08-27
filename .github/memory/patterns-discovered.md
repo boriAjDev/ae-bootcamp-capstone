@@ -86,6 +86,8 @@ actionlint's shellcheck integration (SC2128) is what surfaced this, which is why
 
 **`None` is a reserved issue-form dropdown option.** GitHub rejects the form with a "reserved word" error, so the no-organization sentinel is `n/a`. `validate-request.js` exports it as `NO_ORGANIZATION`; matching is case-insensitive. Note the CI job only checks that the form is valid YAML, not that it satisfies GitHub's form schema, so this class of error only appears when GitHub renders the template.
 
+**Team permissions are assigned with one vocabulary and reported with another.** Assignment uses `pull`/`triage`/`push`/`maintain`/`admin`, but `GET /orgs/{org}/teams/{slug}/repos/{owner}/{repo}` reports `role_name` as `read`/`triage`/`write`/`maintain`/`admin`. `scripts/team-permissions.js` holds the mapping and the comparison so verification is unit tested. Request the `application/vnd.github.v3.repository+json` media type, otherwise the endpoint answers 204/404 with no body.
+
 ## Secret Requirements
 
 The workflow requires the following repository secrets:

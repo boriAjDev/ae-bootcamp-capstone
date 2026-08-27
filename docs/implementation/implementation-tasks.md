@@ -73,14 +73,19 @@ This backlog implements [risk-remediation-plan.md](risk-remediation-plan.md). Ta
 
 ## 3. Permission correctness
 
-- [ ] **T3.1 Validate team existence before repository creation or define explicit deferred assignment behavior.**
+- [x] **T3.1 Validate team existence before repository creation or define explicit deferred assignment behavior.**
   - Acceptance: missing teams cannot be mistaken for completed access provisioning.
-- [ ] **T3.2 Treat permission assignment failures as meaningful.** Collect assignment results and fail or mark the request partial when any requested team is not assigned.
+  - Decision: reject before creating anything. A missing team stops the request while nothing exists to clean up, rather than deferring the grant, which is easy to forget. The issue comment names the missing teams.
+- [x] **T3.2 Treat permission assignment failures as meaningful.** Collect assignment results and fail or mark the request partial when any requested team is not assigned.
   - Acceptance: success is impossible when a required permission is missing.
-- [ ] **T3.3 Verify effective permissions.** Query repository collaborators/team access after assignment and compare with the requested mapping.
+  - Status: the `|| echo "Warning..."` fallback is gone. Assignment runs through `actions/github-script`, and any API error fails the step.
+- [x] **T3.3 Verify effective permissions.** Query repository collaborators/team access after assignment and compare with the requested mapping.
   - Acceptance: each requested team has the expected permission before the success comment.
-- [ ] **T3.4 Document least-privilege team mapping.** Review whether `admin`, `maintain`, `push`, and `pull` are appropriate for each group.
+  - Status: after assigning, the workflow reads each team's effective `role_name` and compares it with the requested permission via `scripts/team-permissions.js`. Any missing or mismatched grant fails the run, and the failure comment lists exactly which access was not applied. A team granted **more** access than requested is also treated as a mismatch.
+- [x] **T3.4 Document least-privilege team mapping.** Review whether `admin`, `maintain`, `push`, and `pull` are appropriate for each group.
   - Acceptance: the mapping has an owner and security review sign-off.
+  - Status: the README now records a rationale per group and notes that `devops` is `maintain` rather than `admin` so it cannot delete repositories or change access.
+  - Residual: mapping owner and security sign-off are still unassigned.
 
 ## 4. Scaffold naming and generated-repository quality
 

@@ -217,7 +217,79 @@ jobs:
           exit 1
 
       # ------------------------------------------------------------------ #
-      #  6. Create the new repository                                       #
+      #  6. Reject the request if a requested team is missing               #
+      # ------------------------------------------------------------------ #
+      - name: Verify requested teams exist
+        id: teams
+        if: needs.request.outputs.owner_type == 'organization'
+        uses: actions/github-script@v7
+        env:
+          ORGANIZATION: ${{ needs.request.outputs.organization }}
+          PERMISSION_GROUPS: ${{ needs.request.outputs.groups }}
+        with:
+          github-token: ${{ secrets.REPO_CREATION_TOKEN }}
+          script: |
+            const org = process.env.ORGANIZATION;
+            const groups = process.env.PERMISSION_GROUPS.split(',').filter(Boolean);
+            const missing = [];
+
+            for (const slug of groups) {
+              try {
+                await github.rest.teams.getByName({ org, team_slug: slug });
+                core.info(`Team '${slug}' exists in ${org}.`);
+              } catch (error) {
+                if (error.status === 404) {
+                  missing.push(slug);
+                } else {
+                  throw error;
+                }
+              }
+            }
+
+            core.setOutput('missing', missing.join(','));
+
+      - name: Comment that a requested team is missing
+        if: steps.teams.outputs.missing != ''
+        uses: actions/github-script@v7
+        env:
+          ORGANIZATION: ${{ needs.request.outputs.organization }}
+          MISSING_TEAMS: ${{ steps.teams.outputs.missing }}
+        with:
+          script: |
+            const { ORGANIZATION, MISSING_TEAMS } = process.env;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const missing = MISSING_TEAMS.split(',');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                '## ❌ Repository Request Rejected — Missing Team',
+                '',
+                `The following requested team(s) do not exist in \`${ORGANIZATION}\`:`,
+                '',
+                ...missing.map((team) => `- \`${team}\``),
+                '',
+                'The request was stopped **before** the repository was created, so nothing needs cleaning',
+                'up. Granting access later is easy to forget, so the request is rejected instead of being',
+                'provisioned with incomplete access.',
+                '',
+                '**To continue:** ask an owner of the organization to create the team, or edit this issue to',
+                'select only existing groups, then remove the `repo-request` label and add it again.',
+                '',
+                `[View workflow run](${runUrl})`,
+              ].join('\n'),
+            });
+
+      - name: Fail on missing team
+        if: steps.teams.outputs.missing != ''
+        run: |
+          echo "::error::Requested team(s) do not exist. Request rejected before creating anything."
+          exit 1
+
+      # ------------------------------------------------------------------ #
+      #  7. Create the new repository                                       #
       # ------------------------------------------------------------------ #
       - name: Create repository
         id: create
@@ -232,7 +304,7 @@ jobs:
             --description "$DESCRIPTION"
 
       # ------------------------------------------------------------------ #
-      #  7. Push scaffold template                                          #
+      #  8. Push scaffold template                                          #
       # ------------------------------------------------------------------ #
       - name: Push scaffold template
         id: scaffold
@@ -263,33 +335,91 @@ jobs:
           git push origin HEAD:main
 
       # ------------------------------------------------------------------ #
-      #  8. Assign team permissions                                         #
+      #  9. Assign team permissions and verify they took effect             #
       # ------------------------------------------------------------------ #
-      - name: Assign team permissions
+      - name: Assign and verify team permissions
         id: permissions
         if: needs.request.outputs.owner_type == 'organization'
+        uses: actions/github-script@v7
         env:
-          GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
-          REPO_NAME: ${{ needs.request.outputs.repo_name }}
           ORGANIZATION: ${{ needs.request.outputs.organization }}
+          REPO_NAME: ${{ needs.request.outputs.repo_name }}
           PERMISSIONS_JSON: ${{ needs.request.outputs.permissions }}
-        run: |
-          # Groups are allow-listed during validation, so every entry maps to a permission.
-          echo "$PERMISSIONS_JSON" | jq -c '.[]' | while read -r entry; do
-            GROUP="$(echo "$entry" | jq -r '.group')"
-            PERMISSION="$(echo "$entry" | jq -r '.permission')"
+        with:
+          github-token: ${{ secrets.REPO_CREATION_TOKEN }}
+          script: |
+            const workspace = process.env.GITHUB_WORKSPACE;
+            const { evaluateAssignments, describeFailures } =
+              require(`${workspace}/capstone/scripts/team-permissions.js`);
 
-            echo "Assigning '$PERMISSION' permission to team '$GROUP'..."
-            gh api \
-              --method PUT \
-              -H "Accept: application/vnd.github+json" \
-              "/orgs/$ORGANIZATION/teams/$GROUP/repos/$ORGANIZATION/$REPO_NAME" \
-              -f permission="$PERMISSION" \
-              || echo "Warning: Could not assign team '$GROUP' (team may not exist in org). Skipping."
-          done
+            const org = process.env.ORGANIZATION;
+            const repo = process.env.REPO_NAME;
+            const requested = JSON.parse(process.env.PERMISSIONS_JSON);
+
+            // An assignment error is fatal: partial access must never look like success.
+            for (const { group, permission } of requested) {
+              core.info(`Assigning '${permission}' to team '${group}'...`);
+              await github.rest.teams.addOrUpdateRepoPermissionsInOrg({
+                org,
+                team_slug: group,
+                owner: org,
+                repo,
+                permission,
+              });
+            }
+
+            // Read back what GitHub actually granted rather than trusting the writes.
+            const observed = {};
+            for (const { group } of requested) {
+              try {
+                const response = await github.request(
+                  'GET /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}',
+                  {
+                    org,
+                    team_slug: group,
+                    owner: org,
+                    repo,
+                    headers: { accept: 'application/vnd.github.v3.repository+json' },
+                  },
+                );
+                observed[group] = response.data.role_name ?? null;
+              } catch (error) {
+                if (error.status === 404) {
+                  observed[group] = null;
+                } else {
+                  throw error;
+                }
+              }
+            }
+
+            const evaluation = evaluateAssignments(requested, observed);
+
+            core.summary.addHeading('Team permissions', 3).addTable([
+              [
+                { data: 'Team', header: true },
+                { data: 'Requested', header: true },
+                { data: 'Effective', header: true },
+                { data: 'Status', header: true },
+              ],
+              ...evaluation.results.map((result) => [
+                result.group,
+                result.expected,
+                result.actual ?? 'none',
+                result.status,
+              ]),
+            ]);
+            await core.summary.write();
+
+            core.setOutput('failures', describeFailures(evaluation.results).join('\n'));
+
+            if (!evaluation.ok) {
+              core.setFailed(
+                `Requested access was not applied: ${describeFailures(evaluation.results).join('; ')}`,
+              );
+            }
 
       # ------------------------------------------------------------------ #
-      #  9. Report outcome                                                  #
+      #  10. Report outcome                                                 #
       # ------------------------------------------------------------------ #
       - name: Publish stage summary
         if: always()
@@ -333,7 +463,7 @@ jobs:
 
             const isOrg = OWNER_TYPE === 'organization';
             const permissions = isOrg
-              ? `\`${PERMISSION_GROUPS}\``
+              ? `\`${PERMISSION_GROUPS}\` (verified)`
               : 'not applied — the repository is not owned by an organization';
 
             await github.rest.issues.createComment({
@@ -362,7 +492,7 @@ jobs:
             });
 
       - name: Comment failure
-        if: failure() && steps.target.outputs.exists != 'true'
+        if: failure() && steps.target.outputs.exists != 'true' && steps.teams.outputs.missing == ''
         uses: actions/github-script@v7
         env:
           REPO_NAME: ${{ needs.request.outputs.repo_name }}
@@ -371,11 +501,12 @@ jobs:
           CREATE_RESULT: ${{ steps.create.conclusion }}
           SCAFFOLD_RESULT: ${{ steps.scaffold.conclusion }}
           PERMISSIONS_RESULT: ${{ steps.permissions.conclusion }}
+          PERMISSION_FAILURES: ${{ steps.permissions.outputs.failures }}
         with:
           script: |
             const {
               REPO_NAME, TARGET_OWNER, REPO_URL,
-              CREATE_RESULT, SCAFFOLD_RESULT, PERMISSIONS_RESULT,
+              CREATE_RESULT, SCAFFOLD_RESULT, PERMISSIONS_RESULT, PERMISSION_FAILURES,
             } = process.env;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
 
@@ -386,19 +517,36 @@ jobs:
             }[result] || '⏭️ not reached');
 
             const created = CREATE_RESULT === 'success';
-            const nextAction = created
-              ? [
-                  `\`${TARGET_OWNER}/${REPO_NAME}\` was created, but provisioning did not finish: ${REPO_URL}`,
-                  '',
-                  'Re-labelling alone will not fix this, because a request is rejected when the target',
-                  'already exists. An operator must either delete the repository and then remove and',
-                  're-add the `repo-request` label, or finish the remaining stages by hand.',
-                ].join('\n')
-              : [
-                  'No repository was created, so nothing needs cleaning up.',
-                  '',
-                  'To retry, remove the `repo-request` label and add it again.',
-                ].join('\n');
+            const permissionsFailed = PERMISSIONS_RESULT === 'failure';
+
+            const detail = permissionsFailed && PERMISSION_FAILURES
+              ? ['', '**Access that was not applied:**', '', ...PERMISSION_FAILURES.split('\n').map((line) => `- ${line}`)]
+              : [];
+
+            let nextAction;
+            if (!created) {
+              nextAction = [
+                'No repository was created, so nothing needs cleaning up.',
+                '',
+                'To retry, remove the `repo-request` label and add it again.',
+              ].join('\n');
+            } else if (permissionsFailed) {
+              nextAction = [
+                `\`${TARGET_OWNER}/${REPO_NAME}\` exists and contains the scaffold, but the requested access`,
+                `was not fully applied: ${REPO_URL}`,
+                '',
+                'Do **not** delete the repository. An operator should grant the missing access directly,',
+                'then close this issue. See "Recovering from a Partial Failure" in the capstone README.',
+              ].join('\n');
+            } else {
+              nextAction = [
+                `\`${TARGET_OWNER}/${REPO_NAME}\` was created, but provisioning did not finish: ${REPO_URL}`,
+                '',
+                'Re-labelling alone will not fix this, because a request is rejected when the target',
+                'already exists. An operator must either delete the repository and then remove and',
+                're-add the `repo-request` label, or finish the remaining stages by hand.',
+              ].join('\n');
+            }
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -414,6 +562,7 @@ jobs:
                 `| Create repository | ${label(CREATE_RESULT)} |`,
                 `| Push scaffold | ${label(SCAFFOLD_RESULT)} |`,
                 `| Assign permissions | ${label(PERMISSIONS_RESULT)} |`,
+                ...detail,
                 '',
                 nextAction,
                 '',

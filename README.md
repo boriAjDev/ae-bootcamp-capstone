@@ -151,15 +151,30 @@ path: it resolves the owner with `gh api user`, which has no meaningful result f
 
 ### Required Teams (in target org)
 
-The following GitHub teams must exist in the target organization. They are not needed when `n/a` is
-selected, because the repository is not owned by an organization.
+Every requested team must already exist in the target organization. The workflow checks this
+**before** creating the repository and rejects the request if a team is missing, so a repository is
+never left provisioned with incomplete access. Teams are not needed when `n/a` is selected, because
+the repository is not owned by an organization.
 
-| Group | Team Slug | Permission |
-|-------|-----------|-----------|
-| devops | `devops` | maintain |
-| engineers | `engineers` | push |
-| admins | `admins` | admin |
-| qa | `qa` | pull |
+| Group | Team Slug | Permission | Why |
+|-------|-----------|-----------|-----|
+| devops | `devops` | maintain | Manages settings and releases, but must not be able to delete the repository |
+| engineers | `engineers` | push | Day-to-day contributors; write access is enough to open branches and merge PRs |
+| admins | `admins` | admin | Repository owners; the only role that can change access or delete the repository |
+| qa | `qa` | pull | Reads code and raises issues; no write access required |
+
+Only `admins` receives `admin`. `devops` is deliberately `maintain` rather than `admin`, since
+`maintain` covers repository administration without permitting deletion or access changes.
+
+| Item | Value |
+|------|-------|
+| Mapping owner | _assign a named owner_ |
+| Review cadence | Re-check when a group's responsibilities change, or at least annually |
+| Security sign-off | _pending_ |
+
+Access is verified after assignment: the workflow reads back each team's effective role and fails the
+run if it does not match the requested permission, so a successful run always means access was
+applied.
 
 ## Tests
 
@@ -167,8 +182,9 @@ selected, because the repository is not owned by an organization.
 node --test tests/
 ```
 
-The suite covers issue-body parsing and request validation using fixtures in `tests/fixtures/`. CI
-additionally lints the workflows with actionlint and builds each scaffold template.
+The suite covers issue-body parsing, request validation, and team permission comparison using
+fixtures in `tests/fixtures/`. CI additionally lints the workflows with actionlint and builds each
+scaffold template.
 
 ## Memory System
 
