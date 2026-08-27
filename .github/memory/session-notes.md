@@ -95,3 +95,27 @@ Start with T0.1-T0.4: add workflow validation, fixture the parser behavior, add 
 - The first CI run failed on lint and exposed a fifth defect: permission groups were passed through an env var named `GROUPS`, which bash overwrites with its built-in group-ID array. Team assignment never matched a real team and the empty-group check could never fire, yet runs still reported success. Renamed to `PERMISSION_GROUPS`.
 - CI run `33107397245` (commit `2d35a3b`) passed all five jobs, so T0.1-T0.4 are verified and Phase 0 is complete.
 - Useful local loop for future workflow edits: download `actionlint` and `shellcheck` binaries to a temp folder and run `actionlint` from the repository root, since Docker is not available on this machine.
+
+---
+
+## Session 5 — Phase 1 Validation and Authorization
+
+**Date**: 2026-08-27
+**Summary**: Implemented T1.0-T1.5 and T1.7. T1.6 remains blocked on a credential decision.
+
+### What Changed
+- `scripts/parse-request.js` now splits the issue body on heading lines instead of matching `[^#]`, so `#`, quotes, and multiline descriptions survive intact. It also treats GitHub's `_No response_` placeholder as empty.
+- New `scripts/validate-request.js` holds the request schema: approved organizations, app types, a group allow-list with permission mapping, the repository-name pattern, and a 350-character description limit. It returns either errors or a normalized request.
+- The issue form's Organization field is now a dropdown (`BoriOrg`, `MCO-Test-Org`, `Slalom`, `None`).
+- `create-repo.yml` parses and validates in one step, branches on owner type, and skips team assignment when there is no organization.
+- Closed a script-injection path by moving every `${{ }}` out of `github-script` bodies into `env:`.
+
+### Decisions
+- `None` creates the repository under the account owning `REPO_CREATION_TOKEN`, resolved at run time with `gh api user` and reported in the success comment. This needs revisiting if T1.6 moves to a GitHub App, which has no user account.
+- Single-character repository names are permitted; leading and trailing hyphens are rejected.
+- Unknown permission groups are rejected rather than skipped.
+
+### Verification
+- `node --test tests/`: 39 passed, 0 failed.
+- actionlint 1.7.7 with shellcheck 0.10.0: 0 errors.
+- Confirmed against GitHub's form schema docs that `checkboxes` supports `validations.required`, and that `None` is only disallowed as a dropdown option when a `default` index is set.

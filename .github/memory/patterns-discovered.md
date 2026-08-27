@@ -41,7 +41,13 @@ The extraction regex is `### <Label>\s+([^#]+?)(?=\n###|$)`. Checkbox groups are
 
 ## GitHub Actions — Issue-Triggered Workflow
 
-**Pattern**: Use `on: issues: types: [labeled]` to trigger the pipeline only when the `repo-request` label is applied. This prevents re-runs on every comment. The `create-repo.yml` workflow:
+**Pattern**: Use `on: issues: types: [labeled]` to trigger the pipeline only when the `repo-request` label is applied. This prevents re-runs on every comment.
+
+**Issue-event workflows only run from the default branch.** Changes on a feature branch have no effect on real requests until they are merged to `main`, even though CI passes on the branch.
+
+**Do not rely on `validations: required: true` for `checkboxes` in an issue form.** A live request (issue #3) was submitted with zero boxes checked and the form accepted it. Requiredness for checkbox groups must be enforced in `validate-request.js`.
+
+The `create-repo.yml` workflow:
 1. Parses the issue body.
 2. Validates required fields.
 3. Creates the repository via `gh repo create`.
@@ -69,6 +75,14 @@ Teams must already exist in the target organization. The workflow skips team ass
 actionlint's shellcheck integration (SC2128) is what surfaced this, which is why the lint job must stay green rather than be downgraded to a warning.
 
 ---
+
+**Never interpolate `${{ }}` into an `actions/github-script` body.** The script is assembled as JavaScript source, so any issue-supplied value lands inside a template literal and can execute. Pass values through the step's `env:` block and read `process.env` instead. The workflow previously did this with the parsed application type, inside a job holding a `repo`/`admin:org` token.
+
+**Validation belongs in `scripts/validate-request.js`, not in shell.** It defines the request schema (approved organizations, app types, group allow-list and permission mapping, name pattern, and the 350-character description limit that matches GitHub's own) and is unit tested. `parseRequest` extracts fields, `validateRequest` decides whether provisioning may proceed and returns the normalized request.
+
+**Check which commit a CI run actually covers.** `gh run list --limit 1` returns the newest run, which is not necessarily a run for the newest commit. Compare `headSha` against `git rev-parse HEAD` before claiming CI is green. CI previously triggered only on pushes to `main` or on `pull_request`, so after a PR merged, feature-branch commits silently ran no checks at all; `ci.yml` now runs on every branch push.
+
+**Creating pull requests from the CLI fails here.** The authenticated account is an Enterprise Managed User, so `gh pr create` returns `Unauthorized: As an Enterprise Managed User, you cannot access this content`. Pull requests must be opened in the browser.
 
 ## Secret Requirements
 

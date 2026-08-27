@@ -11,28 +11,79 @@ const FIELD_LABELS = {
   description: 'Repository Description',
 };
 
-function extractSection(body, label) {
-  const re = new RegExp(`### ${label}\\s+([^#]+?)(?=\\n###|$)`, 's');
-  const match = String(body).match(re);
-  return match ? match[1].trim() : '';
+// GitHub renders an unanswered field with this literal placeholder.
+const NO_RESPONSE = '_No response_';
+
+const HEADING = /^###\s+(.+?)\s*$/;
+const CHECKBOX = /^\s*-\s+\[([ xX])\]\s*(.*)$/;
+
+// Splitting on heading lines keeps field values intact when they contain "#",
+// quotes, or blank lines, which a single whole-body regex cannot do.
+function parseSections(body) {
+  const sections = new Map();
+  const lines = String(body).replace(/\r\n/g, '\n').split('\n');
+
+  let label = null;
+  let buffer = [];
+
+  const flush = () => {
+    if (label !== null && !sections.has(label)) {
+      sections.set(label, buffer.join('\n').trim());
+    }
+  };
+
+  for (const line of lines) {
+    const heading = HEADING.exec(line);
+    if (heading) {
+      flush();
+      label = heading[1];
+      buffer = [];
+    } else if (label !== null) {
+      buffer.push(line);
+    }
+  }
+  flush();
+
+  return sections;
 }
 
-function extractGroups(body) {
-  const section = extractSection(body, FIELD_LABELS.groups);
-  return (section.match(/- \[x\] (\w+)/gi) || [])
-    .map((line) => line.replace(/- \[x\] /i, '').trim().toLowerCase());
+function sectionValue(sections, label) {
+  const value = sections.get(label);
+  if (value === undefined || value === NO_RESPONSE) {
+    return '';
+  }
+  return value;
+}
+
+function checkedGroups(sections) {
+  const section = sectionValue(sections, FIELD_LABELS.groups);
+  if (!section) {
+    return [];
+  }
+
+  const groups = [];
+  for (const line of section.split('\n')) {
+    const match = CHECKBOX.exec(line);
+    if (match && match[1].toLowerCase() === 'x') {
+      const label = match[2].trim().toLowerCase();
+      if (label) {
+        groups.push(label);
+      }
+    }
+  }
+  return groups;
 }
 
 function parseRequest(body) {
-  const text = body || '';
+  const sections = parseSections(body || '');
 
   return {
-    repoName: extractSection(text, FIELD_LABELS.repoName),
-    repoOrg: extractSection(text, FIELD_LABELS.repoOrg),
-    appType: extractSection(text, FIELD_LABELS.appType).toLowerCase(),
-    groups: extractGroups(text),
-    description: extractSection(text, FIELD_LABELS.description),
+    repoName: sectionValue(sections, FIELD_LABELS.repoName),
+    repoOrg: sectionValue(sections, FIELD_LABELS.repoOrg),
+    appType: sectionValue(sections, FIELD_LABELS.appType).toLowerCase(),
+    groups: checkedGroups(sections),
+    description: sectionValue(sections, FIELD_LABELS.description),
   };
 }
 
-module.exports = { FIELD_LABELS, extractSection, extractGroups, parseRequest };
+module.exports = { FIELD_LABELS, NO_RESPONSE, parseSections, parseRequest };

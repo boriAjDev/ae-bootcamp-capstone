@@ -20,10 +20,43 @@ This repository provides a **self-service platform** that allows engineers to re
 | Field | Description | Options |
 |-------|-------------|---------|
 | Repository Name | Lowercase name for the new repo | free text |
-| Organization | GitHub org to create the repo in | free text |
+| Organization | GitHub org to create the repo in | `BoriOrg`, `MCO-Test-Org`, `Slalom`, `None` |
 | Application Type | The tech stack scaffold to use | `dotnet`, `java`, `python` |
 | Permission Groups | Teams granted access | `devops`, `engineers`, `admins`, `qa` |
 | Description | Brief purpose of the application | free text |
+
+## Request Schema
+
+Requests are validated by `scripts/validate-request.js` before anything is created. A request that
+breaks any rule below is rejected with a comment on the issue, and no repository API call is made.
+
+| Field | Rule |
+|-------|------|
+| Repository Name | Required. Lowercase letters, numbers and hyphens only; must start and end with a letter or number. 1-100 characters, so single-character names are allowed. |
+| Organization | Required. Must be one of the four approved values. Matching ignores case and is normalized back to the approved spelling. Any other value, including a hand-edited issue body, is rejected. |
+| Application Type | Required. One of `dotnet`, `java`, `python`. |
+| Permission Groups | Must all be in the allow-list. Unknown groups are rejected rather than skipped. At least one is required when an organization is selected. |
+| Description | Required and cannot be blank. Maximum 350 characters, the limit GitHub enforces on repository descriptions. |
+
+### Choosing `None`
+
+`None` creates the repository outside any organization, under the account that owns
+`REPO_CREATION_TOKEN`. The workflow resolves that account at run time and reports it in the success
+comment, so the actual owner is always visible on the issue. Because GitHub teams only exist inside
+organizations, no team permissions are applied and permission groups are not required.
+
+### If the repository already exists
+
+The request is **rejected**. Before creating anything, the workflow checks whether the target already
+exists and stops if it does. Nothing is created, pushed, or modified, and the issue receives a comment
+naming the existing repository with the options for continuing.
+
+Existing repositories are never reused, because pushing a scaffold into one could overwrite work that
+is already there. To retry, edit the issue with a different repository name and re-apply the
+`repo-request` label.
+
+If the check cannot reach GitHub, or the token lacks access to answer the question, the run fails
+rather than assuming the name is free.
 
 ## Scaffold Templates
 
@@ -41,11 +74,36 @@ Add this secret to the capstone repository:
 
 | Secret | Description |
 |--------|-------------|
-| `REPO_CREATION_TOKEN` | GitHub PAT with `repo`, `admin:org`, `read:org` scopes in the target org |
+| `REPO_CREATION_TOKEN` | GitHub PAT (classic) with `repo`, `admin:org`, `read:org` scopes in the target org |
+
+### Credential Policy
+
+The workflow uses a **classic** personal access token. A classic PAT cannot be restricted to specific
+organizations: it carries the granted scopes across every organization the owning account can access.
+That blast radius is accepted deliberately, with these compensating controls:
+
+- The organization allow-list in `scripts/validate-request.js` runs **before** any repository API call,
+  so an edited issue body cannot direct the token at an unapproved organization.
+- `actions/github-script` steps never interpolate issue content into script bodies, so issue text
+  cannot execute in the job that holds the token.
+- The token lives only in the `REPO_CREATION_TOKEN` secret and is passed per step through `GH_TOKEN`.
+
+Operational requirements:
+
+| Item | Value |
+|------|-------|
+| Owner | _assign a named owner_ |
+| Rotation | Rotate at least every 90 days, and immediately if a workflow run is compromised |
+| On rotation | Update the `REPO_CREATION_TOKEN` secret; no workflow change is needed |
+| Revocation | Revoke in the owning account's Developer settings; runs then fail at repository creation |
+
+If the token is ever moved to a GitHub App or a fine-grained PAT, revisit the `None` provisioning
+path: it resolves the owner with `gh api user`, which has no meaningful result for a GitHub App.
 
 ### Required Teams (in target org)
 
-The following GitHub teams must exist in the target organization:
+The following GitHub teams must exist in the target organization. They are not needed when `None` is
+selected, because the repository is not owned by an organization.
 
 | Group | Team Slug | Permission |
 |-------|-----------|-----------|
@@ -53,6 +111,15 @@ The following GitHub teams must exist in the target organization:
 | engineers | `engineers` | push |
 | admins | `admins` | admin |
 | qa | `qa` | pull |
+
+## Tests
+
+```bash
+node --test tests/
+```
+
+The suite covers issue-body parsing and request validation using fixtures in `tests/fixtures/`. CI
+additionally lints the workflows with actionlint and builds each scaffold template.
 
 ## Memory System
 

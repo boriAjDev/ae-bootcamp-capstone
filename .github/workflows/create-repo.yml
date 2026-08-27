@@ -8,6 +8,11 @@ jobs:
   create-repo:
     if: github.event.label.name == 'repo-request'
     runs-on: ubuntu-latest
+    # Serializes repeated labelling of the same issue so two runs cannot both pass
+    # the existence check. Collisions between different issues are still open (T2.2).
+    concurrency:
+      group: create-repo-${{ github.event.issue.number }}
+      cancel-in-progress: false
     permissions:
       issues: write
       contents: read
@@ -22,91 +27,160 @@ jobs:
           path: capstone
 
       # ------------------------------------------------------------------ #
-      #  2. Parse the issue body                                            #
+      #  2. Parse and validate the request                                  #
       # ------------------------------------------------------------------ #
-      - name: Parse issue body
-        id: parse
+      - name: Parse and validate request
+        id: request
         uses: actions/github-script@v7
         with:
           script: |
-            const { parseRequest } = require(`${process.env.GITHUB_WORKSPACE}/capstone/scripts/parse-request.js`);
-            const request = parseRequest(context.payload.issue.body);
+            const workspace = process.env.GITHUB_WORKSPACE;
+            const { parseRequest } = require(`${workspace}/capstone/scripts/parse-request.js`);
+            const { validateRequest } = require(`${workspace}/capstone/scripts/validate-request.js`);
 
-            core.setOutput('repo_name',    request.repoName);
-            core.setOutput('repo_org',     request.repoOrg);
-            core.setOutput('app_type',     request.appType);
-            core.setOutput('groups',       request.groups.join(','));
-            core.setOutput('description',  request.description);
+            const result = validateRequest(parseRequest(context.payload.issue.body));
+            core.setOutput('valid', String(result.valid));
 
-            core.info(`repo_name: ${request.repoName}`);
-            core.info(`repo_org:  ${request.repoOrg}`);
-            core.info(`app_type:  ${request.appType}`);
-            core.info(`groups:    ${request.groups.join(',')}`);
+            if (!result.valid) {
+              core.setOutput('errors', result.errors.map((error) => `- ${error}`).join('\n'));
+              core.warning(`Request rejected: ${result.errors.join(' ')}`);
+              return;
+            }
 
-      # ------------------------------------------------------------------ #
-      #  3. Validate required fields                                        #
-      # ------------------------------------------------------------------ #
-      - name: Validate inputs
-        id: validate
-        env:
-          REPO_NAME: ${{ steps.parse.outputs.repo_name }}
-          REPO_ORG: ${{ steps.parse.outputs.repo_org }}
-          APP_TYPE: ${{ steps.parse.outputs.app_type }}
-          # Must not be named GROUPS: bash overwrites that name with its built-in array.
-          PERMISSION_GROUPS: ${{ steps.parse.outputs.groups }}
-        run: |
+            const request = result.request;
+            core.setOutput('repo_name', request.repoName);
+            core.setOutput('owner_type', request.ownerType);
+            core.setOutput('organization', request.organization ?? '');
+            core.setOutput('app_type', request.appType);
+            core.setOutput('groups', request.groups.join(','));
+            core.setOutput('description', request.description);
+            core.setOutput('permissions', JSON.stringify(request.permissions));
 
-          ERRORS=""
-
-          if [ -z "$REPO_NAME" ]; then
-            ERRORS="$ERRORS\n- Repository Name is required."
-          elif ! echo "$REPO_NAME" | grep -qE '^[a-z0-9][a-z0-9\-]*[a-z0-9]$'; then
-            ERRORS="$ERRORS\n- Repository Name must be lowercase alphanumeric with hyphens (no leading/trailing hyphens)."
-          fi
-
-          if [ -z "$REPO_ORG" ]; then
-            ERRORS="$ERRORS\n- Organization is required."
-          fi
-
-          if [[ "$APP_TYPE" != "dotnet" && "$APP_TYPE" != "java" && "$APP_TYPE" != "python" ]]; then
-            ERRORS="$ERRORS\n- Application Type must be one of: dotnet, java, python. Got: '$APP_TYPE'."
-          fi
-
-          if [ -z "$PERMISSION_GROUPS" ]; then
-            ERRORS="$ERRORS\n- At least one Permission Group must be selected."
-          fi
-
-          if [ -n "$ERRORS" ]; then
-            {
-              echo "VALIDATION_ERRORS<<EOF"
-              printf "%b" "$ERRORS"
-              echo ""
-              echo "EOF"
-              echo "valid=false"
-            } >> "$GITHUB_OUTPUT"
-          else
-            echo "valid=true" >> "$GITHUB_OUTPUT"
-          fi
+            core.summary
+              .addHeading('Repository request', 3)
+              .addTable([
+                [{ data: 'Field', header: true }, { data: 'Value', header: true }],
+                ['Repository', request.repoName],
+                ['Owner', request.organization ?? 'no organization (personal account)'],
+                ['Application type', request.appType],
+                ['Permission groups', request.groups.join(', ') || 'none'],
+              ]);
+            await core.summary.write();
 
       # ------------------------------------------------------------------ #
-      #  4. Comment on issue if validation fails                            #
+      #  3. Comment on issue if validation fails                            #
       # ------------------------------------------------------------------ #
       - name: Comment validation failure
-        if: steps.validate.outputs.valid == 'false'
+        if: steps.request.outputs.valid == 'false'
         uses: actions/github-script@v7
+        env:
+          # Passed through env, never interpolated into the script body, because
+          # the issue is attacker controlled.
+          VALIDATION_ERRORS: ${{ steps.request.outputs.errors }}
         with:
           script: |
-            const errors = `${{ steps.validate.outputs.VALIDATION_ERRORS }}`;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `## ❌ Repository Request Failed — Validation Errors\n\nPlease fix the following issues and re-submit:\n${errors}`
+              body: [
+                '## ❌ Repository Request Failed — Validation Errors',
+                '',
+                'No repository was created. Please fix the following and re-apply the `repo-request` label:',
+                '',
+                process.env.VALIDATION_ERRORS,
+                '',
+                `[View workflow run](${runUrl})`,
+              ].join('\n'),
             });
 
       - name: Fail on validation errors
-        if: steps.validate.outputs.valid == 'false'
+        if: steps.request.outputs.valid == 'false'
         run: exit 1
+
+      # ------------------------------------------------------------------ #
+      #  4. Reject the request if the target already exists                 #
+      # ------------------------------------------------------------------ #
+      - name: Check target repository availability
+        id: target
+        env:
+          GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
+          REPO_NAME: ${{ steps.request.outputs.repo_name }}
+          OWNER_TYPE: ${{ steps.request.outputs.owner_type }}
+          ORGANIZATION: ${{ steps.request.outputs.organization }}
+        run: |
+          if [ "$OWNER_TYPE" = "organization" ]; then
+            TARGET_OWNER="$ORGANIZATION"
+          else
+            # 'None' was requested, so the repository is owned by the token's account.
+            TARGET_OWNER="$(gh api user --jq .login)"
+            echo "No organization requested. Target owner is the personal account '$TARGET_OWNER'."
+          fi
+
+          set +e
+          RESPONSE="$(gh api "repos/$TARGET_OWNER/$REPO_NAME" 2>&1)"
+          STATUS=$?
+          set -e
+
+          if [ "$STATUS" -eq 0 ]; then
+            EXISTS=true
+          elif echo "$RESPONSE" | grep -q "HTTP 404"; then
+            EXISTS=false
+          else
+            # A permissions or transport error must not be read as "available".
+            echo "::error::Could not determine whether $TARGET_OWNER/$REPO_NAME exists: $RESPONSE"
+            exit 1
+          fi
+
+          echo "Target $TARGET_OWNER/$REPO_NAME exists: $EXISTS"
+
+          {
+            echo "target_owner=$TARGET_OWNER"
+            echo "exists=$EXISTS"
+            echo "repo_url=https://github.com/$TARGET_OWNER/$REPO_NAME"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment that the repository already exists
+        if: steps.target.outputs.exists == 'true'
+        uses: actions/github-script@v7
+        env:
+          REPO_NAME: ${{ steps.request.outputs.repo_name }}
+          TARGET_OWNER: ${{ steps.target.outputs.target_owner }}
+          REPO_URL: ${{ steps.target.outputs.repo_url }}
+        with:
+          script: |
+            const { REPO_NAME, TARGET_OWNER, REPO_URL } = process.env;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                '## ❌ Repository Request Rejected — Name Already Taken',
+                '',
+                `\`${TARGET_OWNER}/${REPO_NAME}\` already exists: ${REPO_URL}`,
+                '',
+                'Nothing was created or changed. This request is rejected rather than reused, because',
+                'pushing a scaffold into an existing repository could overwrite work that is already there.',
+                '',
+                '**To continue, do one of the following:**',
+                '',
+                `1. Edit this issue with a different **Repository Name**, then re-apply the \`repo-request\` label.`,
+                `2. If \`${REPO_NAME}\` is already your project, no action is needed — use the existing repository.`,
+                `3. If the existing repository is unwanted, ask an owner of \`${TARGET_OWNER}\` to delete or rename it, then re-apply the label.`,
+                '',
+                `[View workflow run](${runUrl})`,
+              ].join('\n'),
+            });
+
+      - name: Fail on existing repository
+        if: steps.target.outputs.exists == 'true'
+        run: |
+          echo "::error::Repository already exists. Request rejected without changes."
+          exit 1
 
       # ------------------------------------------------------------------ #
       #  5. Create the new repository                                       #
@@ -115,34 +189,29 @@ jobs:
         id: create
         env:
           GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
-          REPO_NAME: ${{ steps.parse.outputs.repo_name }}
-          REPO_ORG: ${{ steps.parse.outputs.repo_org }}
-          DESCRIPTION: ${{ steps.parse.outputs.description }}
+          REPO_NAME: ${{ steps.request.outputs.repo_name }}
+          TARGET_OWNER: ${{ steps.target.outputs.target_owner }}
+          DESCRIPTION: ${{ steps.request.outputs.description }}
         run: |
-          # shellcheck disable=SC2153 # REPO_ORG is supplied by the step env block above.
-          gh repo create "$REPO_ORG/$REPO_NAME" \
+          gh repo create "$TARGET_OWNER/$REPO_NAME" \
             --private \
-            --description "$DESCRIPTION" \
-            --confirm
-
-          REPO_URL="https://github.com/$REPO_ORG/$REPO_NAME"
-          echo "repo_url=$REPO_URL" >> "$GITHUB_OUTPUT"
+            --description "$DESCRIPTION"
 
       # ------------------------------------------------------------------ #
-      #  6. Push scaffold template                                         #
+      #  6. Push scaffold template                                          #
       # ------------------------------------------------------------------ #
       - name: Push scaffold template
         env:
           GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
-          REPO_NAME: ${{ steps.parse.outputs.repo_name }}
-          REPO_ORG: ${{ steps.parse.outputs.repo_org }}
-          APP_TYPE: ${{ steps.parse.outputs.app_type }}
+          REPO_NAME: ${{ steps.request.outputs.repo_name }}
+          TARGET_OWNER: ${{ steps.target.outputs.target_owner }}
+          APP_TYPE: ${{ steps.request.outputs.app_type }}
         run: |
           # Clone the newly created empty repo
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
 
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/$REPO_ORG/$REPO_NAME.git" new-repo
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/$TARGET_OWNER/$REPO_NAME.git" new-repo
 
           # Render into a staging directory so the scaffold transformation never walks .git
           bash capstone/scripts/render-template.sh "$APP_TYPE" "$REPO_NAME" scaffold
@@ -154,66 +223,70 @@ jobs:
           git push origin HEAD:main
 
       # ------------------------------------------------------------------ #
-      #  7. Assign team permissions                                        #
+      #  7. Assign team permissions                                         #
       # ------------------------------------------------------------------ #
       - name: Assign team permissions
+        if: steps.request.outputs.owner_type == 'organization'
         env:
           GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
-          REPO_NAME: ${{ steps.parse.outputs.repo_name }}
-          REPO_ORG: ${{ steps.parse.outputs.repo_org }}
-          # Must not be named GROUPS: bash overwrites that name with its built-in array.
-          PERMISSION_GROUPS: ${{ steps.parse.outputs.groups }}
+          REPO_NAME: ${{ steps.request.outputs.repo_name }}
+          ORGANIZATION: ${{ steps.request.outputs.organization }}
+          PERMISSIONS_JSON: ${{ steps.request.outputs.permissions }}
         run: |
-          declare -A PERM_MAP
-          PERM_MAP["devops"]="maintain"
-          PERM_MAP["engineers"]="push"
-          PERM_MAP["admins"]="admin"
-          PERM_MAP["qa"]="pull"
+          # Groups are allow-listed during validation, so every entry maps to a permission.
+          echo "$PERMISSIONS_JSON" | jq -c '.[]' | while read -r entry; do
+            GROUP="$(echo "$entry" | jq -r '.group')"
+            PERMISSION="$(echo "$entry" | jq -r '.permission')"
 
-          IFS=',' read -ra GROUP_LIST <<< "$PERMISSION_GROUPS"
-          for GROUP in "${GROUP_LIST[@]}"; do
-            PERMISSION="${PERM_MAP[$GROUP]}"
-            if [ -z "$PERMISSION" ]; then
-              echo "Warning: Unknown group '$GROUP', skipping."
-              continue
-            fi
             echo "Assigning '$PERMISSION' permission to team '$GROUP'..."
             gh api \
               --method PUT \
               -H "Accept: application/vnd.github+json" \
-              "/orgs/$REPO_ORG/teams/$GROUP/repos/$REPO_ORG/$REPO_NAME" \
+              "/orgs/$ORGANIZATION/teams/$GROUP/repos/$ORGANIZATION/$REPO_NAME" \
               -f permission="$PERMISSION" \
               || echo "Warning: Could not assign team '$GROUP' (team may not exist in org). Skipping."
           done
 
       # ------------------------------------------------------------------ #
-      #  8. Comment success and close the issue                            #
+      #  8. Comment success and close the issue                             #
       # ------------------------------------------------------------------ #
       - name: Comment success and close issue
         if: success()
         uses: actions/github-script@v7
+        env:
+          REPO_URL: ${{ steps.target.outputs.repo_url }}
+          REPO_NAME: ${{ steps.request.outputs.repo_name }}
+          TARGET_OWNER: ${{ steps.target.outputs.target_owner }}
+          OWNER_TYPE: ${{ steps.request.outputs.owner_type }}
+          APP_TYPE: ${{ steps.request.outputs.app_type }}
+          PERMISSION_GROUPS: ${{ steps.request.outputs.groups }}
         with:
           script: |
-            const repoUrl  = "${{ steps.create.outputs.repo_url }}";
-            const repoName = "${{ steps.parse.outputs.repo_name }}";
-            const appType  = "${{ steps.parse.outputs.app_type }}";
-            const groups   = "${{ steps.parse.outputs.groups }}";
+            const {
+              REPO_URL, REPO_NAME, TARGET_OWNER, OWNER_TYPE, APP_TYPE, PERMISSION_GROUPS,
+            } = process.env;
+
+            const isOrg = OWNER_TYPE === 'organization';
+            const permissions = isOrg
+              ? `\`${PERMISSION_GROUPS}\``
+              : 'not applied — the repository is not owned by an organization';
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
               body: [
-                `## ✅ Repository Created Successfully`,
-                ``,
-                `| Field | Value |`,
-                `|-------|-------|`,
-                `| **Repository** | [${repoName}](${repoUrl}) |`,
-                `| **Application Type** | \`${appType}\` |`,
-                `| **Permission Groups** | \`${groups}\` |`,
-                ``,
-                `The scaffold has been pushed to \`main\`. Happy coding! 🚀`
-              ].join('\n')
+                '## ✅ Repository Created Successfully',
+                '',
+                '| Field | Value |',
+                '|-------|-------|',
+                `| **Repository** | [${REPO_NAME}](${REPO_URL}) |`,
+                `| **Owner** | \`${TARGET_OWNER}\` (${isOrg ? 'organization' : 'personal account'}) |`,
+                `| **Application Type** | \`${APP_TYPE}\` |`,
+                `| **Permission Groups** | ${permissions} |`,
+                '',
+                'The scaffold has been pushed to `main`. Happy coding! 🚀',
+              ].join('\n'),
             });
 
             await github.rest.issues.update({
@@ -224,16 +297,25 @@ jobs:
             });
 
       # ------------------------------------------------------------------ #
-      #  9. Comment failure                                                #
+      #  9. Comment failure                                                 #
       # ------------------------------------------------------------------ #
       - name: Comment failure
-        if: failure() && steps.validate.outputs.valid != 'false'
+        if: failure() && steps.request.outputs.valid != 'false' && steps.target.outputs.exists != 'true'
         uses: actions/github-script@v7
         with:
           script: |
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `## ❌ Repository Creation Failed\n\nThe automated pipeline encountered an error. Please check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details and contact the DevOps team if the issue persists.`
+              body: [
+                '## ❌ Repository Creation Failed',
+                '',
+                'The request passed validation but the pipeline failed while provisioning.',
+                'The repository may have been partially created, so check before retrying.',
+                '',
+                `[View workflow run](${runUrl})`,
+              ].join('\n'),
             });
