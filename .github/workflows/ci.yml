@@ -1,10 +1,15 @@
 name: CI
 
 on:
+  # Runs on every branch: restricting push to main meant feature-branch commits
+  # were silently unverified whenever no pull request was open.
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
