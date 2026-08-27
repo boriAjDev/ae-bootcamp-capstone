@@ -1,0 +1,23 @@
+## .NET .gitignore
+
+# Build output
+bin/
+obj/
+out/
+
+# Publish output
+publish/
+
+# VS / Rider
+.vs/
+.idea/
+*.user
+*.suo
+
+# NuGet
+*.nupkg
+packages/
+project.lock.json
+
+# Logs
+*.log
