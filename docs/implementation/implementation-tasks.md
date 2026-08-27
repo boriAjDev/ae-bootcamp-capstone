@@ -133,6 +133,7 @@ Record implementation PRs, test runs, policy decisions, and dry-run results here
 - Organization is now a dropdown, and the workflow branches on owner type. Team assignment is skipped entirely for `None`.
 - Also removed the deprecated `gh repo create --confirm` flag.
 - Credential model chosen: classic PAT, documented in the README with its blast-radius limitation and compensating controls.
+- Verified by CI run `33111452486` on commit `5ab30a1`: all five jobs pass. Earlier Phase 1 commits ran no CI at all, because `ci.yml` only triggered on pushes to `main` or on `pull_request` and no PR was open after PR #2 merged. `ci.yml` now runs on every branch push.
 
 ### First live request (issue #3)
 

@@ -80,6 +80,10 @@ actionlint's shellcheck integration (SC2128) is what surfaced this, which is why
 
 **Validation belongs in `scripts/validate-request.js`, not in shell.** It defines the request schema (approved organizations, app types, group allow-list and permission mapping, name pattern, and the 350-character description limit that matches GitHub's own) and is unit tested. `parseRequest` extracts fields, `validateRequest` decides whether provisioning may proceed and returns the normalized request.
 
+**Check which commit a CI run actually covers.** `gh run list --limit 1` returns the newest run, which is not necessarily a run for the newest commit. Compare `headSha` against `git rev-parse HEAD` before claiming CI is green. CI previously triggered only on pushes to `main` or on `pull_request`, so after a PR merged, feature-branch commits silently ran no checks at all; `ci.yml` now runs on every branch push.
+
+**Creating pull requests from the CLI fails here.** The authenticated account is an Enterprise Managed User, so `gh pr create` returns `Unauthorized: As an Enterprise Managed User, you cannot access this content`. Pull requests must be opened in the browser.
+
 ## Secret Requirements
 
 The workflow requires the following repository secrets:
