@@ -40,9 +40,10 @@ This backlog implements [risk-remediation-plan.md](risk-remediation-plan.md). Ta
   - Acceptance: every accepted group has a permission mapping.
 - [x] **T1.5 Restrict target organizations.** Implement an explicit organization allow-list or an equivalent approval lookup before repository creation.
   - Acceptance: an unapproved organization receives a clear issue comment and no repository API call occurs.
-- [ ] **T1.6 Review credential permissions.** Replace the broad PAT where practical with a GitHub App or fine-grained credential limited to approved organizations and required operations.
+- [x] **T1.6 Review credential permissions.** Replace the broad PAT where practical with a GitHub App or fine-grained credential limited to approved organizations and required operations.
   - Acceptance: the credential policy is documented, tested in a non-production organization, and has an owner and rotation procedure.
-  - Blocked: needs a decision on which credential model is available.
+  - Decision: a classic PAT is the chosen model. A classic PAT cannot be scoped to specific organizations, so the T1.5 organization allow-list and the removal of script interpolation are the compensating controls. Policy, rotation, and revocation are documented under "Credential Policy" in the README.
+  - Residual: a named owner still has to be assigned, and the token should be exercised against a non-production organization before it is relied on.
 - [x] **T1.7 Make parsing safe.** Replace fragile section matching with a parser that handles user text containing `#`, quotes, and multiline content without changing field boundaries.
   - Acceptance: special-character fixtures parse correctly and cannot alter workflow commands.
   - Status: the parser now splits on heading lines instead of matching `[^#]`. Separately, all `${{ }}` interpolation was removed from `actions/github-script` bodies and replaced with `env`, closing a script-injection path.
@@ -124,10 +125,27 @@ Record implementation PRs, test runs, policy decisions, and dry-run results here
 - The first CI run failed the lint job, which caught a latent production bug: the workflow passed permission groups through an env var named `GROUPS`, which bash overwrites with its built-in group-ID array. Team assignment therefore never matched a real team and the empty-group validation could never fire, yet runs still reported success. Renamed to `PERMISSION_GROUPS`, plus quoting and redirect-grouping fixes. Verified locally with actionlint 1.7.7 and shellcheck 0.10.0: 0 errors across both workflows.
 - Deferred by design: hyphenated repository names still produce invalid C# identifiers (`namespace my-new-app.Tests`). CI uses `sampleapp` until the T4.1 naming policy is decided; T4.4 adds hyphen and shortest-name coverage.
 
-### Phase 1 (T1.6 outstanding)
+### Phase 1 (complete)
 
 - Validation moved out of shell and into `scripts/validate-request.js`, so every rule is unit tested. `node --test tests/` covers 39 tests across parsing and validation.
 - The parser now splits the issue body on heading lines, so `#`, quotes, and multiline descriptions are preserved. The Phase 0 fixtures that pinned those defects now assert correct behavior.
 - Closed a script-injection path: `actions/github-script` steps no longer interpolate `${{ }}` into script bodies. Attacker-controlled values arrive via `env` and are read from `process.env`. Verified by scanning the workflow for interpolations outside `env:` blocks.
 - Organization is now a dropdown, and the workflow branches on owner type. Team assignment is skipped entirely for `None`.
 - Also removed the deprecated `gh repo create --confirm` flag.
+- Credential model chosen: classic PAT, documented in the README with its blast-radius limitation and compensating controls.
+
+### First live request (issue #3)
+
+The first real request was reported as "the pipeline did not trigger". It did trigger: run `33108047957`
+fired on `main` from the `issues` event, failed validation, commented on the issue, and exited. No
+repository was created because the request selected no permission groups, and the organization field
+contained the free text `n/a`.
+
+Two findings:
+
+- The issue form's `validations: required: true` on `checkboxes` did **not** prevent submission with
+  zero boxes checked, so form-level requiredness cannot be relied on. The workflow-side allow-list is
+  the real control. The checkbox `validations` block was removed and the requirement stated in the
+  field description instead.
+- `main` was still at the Phase 0 merge, so the request used the old free-text organization field.
+  Merging Phase 1 removes that class of error by making Organization a dropdown.

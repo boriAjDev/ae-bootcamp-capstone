@@ -41,7 +41,13 @@ The extraction regex is `### <Label>\s+([^#]+?)(?=\n###|$)`. Checkbox groups are
 
 ## GitHub Actions — Issue-Triggered Workflow
 
-**Pattern**: Use `on: issues: types: [labeled]` to trigger the pipeline only when the `repo-request` label is applied. This prevents re-runs on every comment. The `create-repo.yml` workflow:
+**Pattern**: Use `on: issues: types: [labeled]` to trigger the pipeline only when the `repo-request` label is applied. This prevents re-runs on every comment.
+
+**Issue-event workflows only run from the default branch.** Changes on a feature branch have no effect on real requests until they are merged to `main`, even though CI passes on the branch.
+
+**Do not rely on `validations: required: true` for `checkboxes` in an issue form.** A live request (issue #3) was submitted with zero boxes checked and the form accepted it. Requiredness for checkbox groups must be enforced in `validate-request.js`.
+
+The `create-repo.yml` workflow:
 1. Parses the issue body.
 2. Validates required fields.
 3. Creates the repository via `gh repo create`.

@@ -61,7 +61,31 @@ Add this secret to the capstone repository:
 
 | Secret | Description |
 |--------|-------------|
-| `REPO_CREATION_TOKEN` | GitHub PAT with `repo`, `admin:org`, `read:org` scopes in the target org |
+| `REPO_CREATION_TOKEN` | GitHub PAT (classic) with `repo`, `admin:org`, `read:org` scopes in the target org |
+
+### Credential Policy
+
+The workflow uses a **classic** personal access token. A classic PAT cannot be restricted to specific
+organizations: it carries the granted scopes across every organization the owning account can access.
+That blast radius is accepted deliberately, with these compensating controls:
+
+- The organization allow-list in `scripts/validate-request.js` runs **before** any repository API call,
+  so an edited issue body cannot direct the token at an unapproved organization.
+- `actions/github-script` steps never interpolate issue content into script bodies, so issue text
+  cannot execute in the job that holds the token.
+- The token lives only in the `REPO_CREATION_TOKEN` secret and is passed per step through `GH_TOKEN`.
+
+Operational requirements:
+
+| Item | Value |
+|------|-------|
+| Owner | _assign a named owner_ |
+| Rotation | Rotate at least every 90 days, and immediately if a workflow run is compromised |
+| On rotation | Update the `REPO_CREATION_TOKEN` secret; no workflow change is needed |
+| Revocation | Revoke in the owning account's Developer settings; runs then fail at repository creation |
+
+If the token is ever moved to a GitHub App or a fine-grained PAT, revisit the `None` provisioning
+path: it resolves the owner with `gh api user`, which has no meaningful result for a GitHub App.
 
 ### Required Teams (in target org)
 

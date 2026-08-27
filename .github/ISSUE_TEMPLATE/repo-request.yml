@@ -48,14 +48,12 @@ body:
     id: groups
     attributes:
       label: "Permission Groups"
-      description: "Select the groups that need access to this repository"
+      description: "Select the groups that need access to this repository. Select at least one, unless Organization is None."
       options:
         - label: devops
         - label: engineers
         - label: admins
         - label: qa
-    validations:
-      required: true
 
   - type: textarea
     id: repo_description
