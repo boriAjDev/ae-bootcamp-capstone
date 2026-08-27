@@ -6,21 +6,24 @@ Reusable patterns, decisions, and lessons for the Self-Service Repository Reques
 
 ## Issue Form Parsing
 
-**Pattern**: GitHub Issue forms (`.github/ISSUE_TEMPLATE/*.yml`) use a structured body with labeled sections. When parsed in GitHub Actions, each field appears in the issue body as:
+The `create-repo.yml` workflow parses the issue body with `actions/github-script`. The parsing logic lives in `scripts/parse-request.js` (`parseRequest(body)`), which the workflow `require`s after checkout, and which `tests/parse-request.test.js` exercises with fixtures in `tests/fixtures/`. Change the parser there, never inline in the workflow, so behavior stays tested.
 
-```
-### <Label>
+The extraction regex is `### <Label>\s+([^#]+?)(?=\n###|$)`. Checkbox groups are parsed with `- \[x\] (\w+)`.
 
-<value>
-```
-
-The `create-repo.yml` workflow uses `actions/github-script` with a JavaScript `extract()` helper function that applies a regular expression (`### <Label>\s+([^#]+?)`) to capture each section value. Checkbox groups are parsed by matching `- [x]` lines within the Permission Groups section.
+**Known parser defects** (fixtures pin the current behavior; Phase 1 will change them):
+- A `#` anywhere in the description makes the whole field parse as empty, because `[^#]` cannot cross it. Nothing validates the description, so the repository is still created.
+- `\w+` truncates hyphenated checkbox labels (`data-platform` becomes `data`), and unknown groups are accepted by the parser.
+- Real GitHub payloads use CRLF; the regex tolerates it because `\s` matches `\r`.
 
 ---
 
 ## Scaffold Templates
 
-**Pattern**: Each application type has a scaffold under `templates/<type>/`. The workflow copies the entire scaffold directory into the newly created repository using the GitHub Contents API (via `gh` CLI). This means scaffold templates must be maintained when updating framework conventions.
+**Pattern**: Each application type has a scaffold under `templates/<type>/`. `scripts/render-template.sh` is the single transformation used by both `create-repo.yml` and the CI scaffold checks, so verified output matches provisioned output. It copies the template, substitutes `APP_NAME` in file contents, renames any path containing `APP_NAME`, and fails if any placeholder survives.
+
+**Renaming is not optional.** Substituting only file contents produced a broken .NET repository: the solution referenced `<name>\<name>.csproj` while the files on disk were still `APP_NAME\APP_NAME.csproj`. Any new placeholder must be handled in both content and path.
+
+**Open naming decision (T4.1)**: repository names with hyphens still generate invalid C# identifiers, because `RootNamespace` and `namespace APP_NAME.Tests;` become `my-new-app`. Java and Python are unaffected, since their package directories (`com/example/appname`, `src/app_name`) are not derived from the repository name.
 
 ### Dotnet
 - Uses `src/<RepoName>.sln` + `src/<RepoName>/` project layout.

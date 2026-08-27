@@ -16,9 +16,14 @@ This repository implements a **self-service platform** for engineers to request 
 |------|---------|
 | `.github/ISSUE_TEMPLATE/repo-request.yml` | The structured issue form engineers fill out |
 | `.github/workflows/create-repo.yml` | The pipeline that processes requests |
+| `.github/workflows/ci.yml` | Lint, parser tests, and scaffold verification |
+| `scripts/parse-request.js` | Issue-body parser shared by the workflow and tests |
+| `scripts/render-template.sh` | Scaffold transformation shared by the workflow and CI |
+| `tests/` | Parser fixtures and `node --test` suite |
 | `templates/dotnet/` | Scaffold for .NET 8 applications |
 | `templates/java/` | Scaffold for Java 17 + Maven applications |
 | `templates/python/` | Scaffold for Python 3.11+ applications |
+| `docs/implementation/` | Risk remediation plan and task backlog |
 | `.github/memory/` | Working Memory System |
 
 ---

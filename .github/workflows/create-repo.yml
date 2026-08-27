@@ -14,45 +14,37 @@ jobs:
 
     steps:
       # ------------------------------------------------------------------ #
-      #  1. Parse the issue body                                            #
+      #  1. Check out this repo for the parser and scaffold templates       #
+      # ------------------------------------------------------------------ #
+      - name: Checkout capstone repo
+        uses: actions/checkout@v4
+        with:
+          path: capstone
+
+      # ------------------------------------------------------------------ #
+      #  2. Parse the issue body                                            #
       # ------------------------------------------------------------------ #
       - name: Parse issue body
         id: parse
         uses: actions/github-script@v7
         with:
           script: |
-            const body = context.payload.issue.body || '';
+            const { parseRequest } = require(`${process.env.GITHUB_WORKSPACE}/capstone/scripts/parse-request.js`);
+            const request = parseRequest(context.payload.issue.body);
 
-            function extract(label) {
-              // Match  ### <label>\n\n<value>
-              const re = new RegExp(`### ${label}\\s+([^#]+?)(?=\\n###|$)`, 's');
-              const m = body.match(re);
-              return m ? m[1].trim() : '';
-            }
+            core.setOutput('repo_name',    request.repoName);
+            core.setOutput('repo_org',     request.repoOrg);
+            core.setOutput('app_type',     request.appType);
+            core.setOutput('groups',       request.groups.join(','));
+            core.setOutput('description',  request.description);
 
-            // Parse checkboxes for groups: lines starting with "- [x]"
-            const groupSection = extract('Permission Groups');
-            const groups = (groupSection.match(/- \[x\] (\w+)/gi) || [])
-              .map(l => l.replace(/- \[x\] /i, '').trim().toLowerCase());
-
-            const repoName     = extract('Repository Name');
-            const repoOrg      = extract('Organization');
-            const appType      = extract('Application Type').toLowerCase();
-            const description  = extract('Repository Description');
-
-            core.setOutput('repo_name',    repoName);
-            core.setOutput('repo_org',     repoOrg);
-            core.setOutput('app_type',     appType);
-            core.setOutput('groups',       groups.join(','));
-            core.setOutput('description',  description);
-
-            core.info(`repo_name: ${repoName}`);
-            core.info(`repo_org:  ${repoOrg}`);
-            core.info(`app_type:  ${appType}`);
-            core.info(`groups:    ${groups.join(',')}`);
+            core.info(`repo_name: ${request.repoName}`);
+            core.info(`repo_org:  ${request.repoOrg}`);
+            core.info(`app_type:  ${request.appType}`);
+            core.info(`groups:    ${request.groups.join(',')}`);
 
       # ------------------------------------------------------------------ #
-      #  2. Validate required fields                                        #
+      #  3. Validate required fields                                        #
       # ------------------------------------------------------------------ #
       - name: Validate inputs
         id: validate
@@ -94,7 +86,7 @@ jobs:
           fi
 
       # ------------------------------------------------------------------ #
-      #  3. Comment on issue if validation fails                           #
+      #  4. Comment on issue if validation fails                            #
       # ------------------------------------------------------------------ #
       - name: Comment validation failure
         if: steps.validate.outputs.valid == 'false'
@@ -114,15 +106,7 @@ jobs:
         run: exit 1
 
       # ------------------------------------------------------------------ #
-      #  4. Check out this repo to access scaffold templates               #
-      # ------------------------------------------------------------------ #
-      - name: Checkout capstone repo
-        uses: actions/checkout@v4
-        with:
-          path: capstone
-
-      # ------------------------------------------------------------------ #
-      #  5. Create the new repository                                      #
+      #  5. Create the new repository                                       #
       # ------------------------------------------------------------------ #
       - name: Create repository
         id: create
@@ -150,27 +134,15 @@ jobs:
           REPO_ORG: ${{ steps.parse.outputs.repo_org }}
           APP_TYPE: ${{ steps.parse.outputs.app_type }}
         run: |
-          SCAFFOLD_DIR="capstone/templates/$APP_TYPE"
-
-          if [ ! -d "$SCAFFOLD_DIR" ]; then
-            echo "::error::Scaffold template not found for app type: $APP_TYPE"
-            exit 1
-          fi
-
           # Clone the newly created empty repo
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
 
           git clone "https://x-access-token:${GH_TOKEN}@github.com/$REPO_ORG/$REPO_NAME.git" new-repo
 
-          # Copy scaffold, replacing placeholder repo name
-          cp -r "$SCAFFOLD_DIR/." new-repo/
-
-          # Replace the placeholder APP_NAME in all text files with the actual repo name
-          find new-repo -type f \( -name "*.md" -o -name "*.xml" -o -name "*.toml" \
-            -o -name "*.json" -o -name "*.csproj" -o -name "*.sln" -o -name "*.txt" \
-            -o -name "*.cs" -o -name "*.java" -o -name "*.py" \) \
-            -exec sed -i "s/APP_NAME/$REPO_NAME/g" {} +
+          # Render into a staging directory so the scaffold transformation never walks .git
+          bash capstone/scripts/render-template.sh "$APP_TYPE" "$REPO_NAME" scaffold
+          cp -r scaffold/. new-repo/
 
           cd new-repo
           git add -A
