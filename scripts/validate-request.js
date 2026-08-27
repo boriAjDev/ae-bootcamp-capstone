@@ -4,7 +4,8 @@
 // request is rejected before any repository API call when it does not conform.
 
 const ORGANIZATIONS = ['BoriOrg', 'MCO-Test-Org', 'Slalom'];
-const NO_ORGANIZATION = 'None';
+// GitHub reserves "None" as an issue-form dropdown option, so "n/a" is the sentinel.
+const NO_ORGANIZATION = 'n/a';
 const APP_TYPES = ['dotnet', 'java', 'python'];
 
 const GROUP_PERMISSIONS = {

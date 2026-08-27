@@ -4,18 +4,25 @@ on:
   issues:
     types: [labeled]
 
+permissions:
+  issues: write
+  contents: read
+
 jobs:
-  create-repo:
+  request:
+    name: Parse and validate request
     if: github.event.label.name == 'repo-request'
     runs-on: ubuntu-latest
-    # Serializes repeated labelling of the same issue so two runs cannot both pass
-    # the existence check. Collisions between different issues are still open (T2.2).
-    concurrency:
-      group: create-repo-${{ github.event.issue.number }}
-      cancel-in-progress: false
-    permissions:
-      issues: write
-      contents: read
+    outputs:
+      repo_name: ${{ steps.request.outputs.repo_name }}
+      owner_type: ${{ steps.request.outputs.owner_type }}
+      organization: ${{ steps.request.outputs.organization }}
+      app_type: ${{ steps.request.outputs.app_type }}
+      groups: ${{ steps.request.outputs.groups }}
+      description: ${{ steps.request.outputs.description }}
+      permissions: ${{ steps.request.outputs.permissions }}
+      target_owner: ${{ steps.owner.outputs.target_owner }}
+      repo_url: ${{ steps.owner.outputs.repo_url }}
 
     steps:
       # ------------------------------------------------------------------ #
@@ -88,7 +95,8 @@ jobs:
               body: [
                 '## ❌ Repository Request Failed — Validation Errors',
                 '',
-                'No repository was created. Please fix the following and re-apply the `repo-request` label:',
+                'No repository was created. To retry, fix the points below, then **remove the',
+                '`repo-request` label and add it again** — re-adding is what starts the workflow.',
                 '',
                 process.env.VALIDATION_ERRORS,
                 '',
@@ -101,10 +109,10 @@ jobs:
         run: exit 1
 
       # ------------------------------------------------------------------ #
-      #  4. Reject the request if the target already exists                 #
+      #  4. Resolve the target owner                                        #
       # ------------------------------------------------------------------ #
-      - name: Check target repository availability
-        id: target
+      - name: Resolve target owner
+        id: owner
         env:
           GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
           REPO_NAME: ${{ steps.request.outputs.repo_name }}
@@ -114,11 +122,42 @@ jobs:
           if [ "$OWNER_TYPE" = "organization" ]; then
             TARGET_OWNER="$ORGANIZATION"
           else
-            # 'None' was requested, so the repository is owned by the token's account.
+            # 'n/a' was requested, so the repository is owned by the token's account.
             TARGET_OWNER="$(gh api user --jq .login)"
             echo "No organization requested. Target owner is the personal account '$TARGET_OWNER'."
           fi
 
+          {
+            echo "target_owner=$TARGET_OWNER"
+            echo "repo_url=https://github.com/$TARGET_OWNER/$REPO_NAME"
+          } >> "$GITHUB_OUTPUT"
+
+  provision:
+    name: Provision repository
+    needs: request
+    runs-on: ubuntu-latest
+    # Keyed on the resolved target so two different issues requesting the same
+    # repository cannot both pass the existence check.
+    concurrency:
+      group: provision-${{ needs.request.outputs.target_owner }}/${{ needs.request.outputs.repo_name }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout capstone repo
+        uses: actions/checkout@v4
+        with:
+          path: capstone
+
+      # ------------------------------------------------------------------ #
+      #  5. Reject the request if the target already exists                 #
+      # ------------------------------------------------------------------ #
+      - name: Check target repository availability
+        id: target
+        env:
+          GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
+          REPO_NAME: ${{ needs.request.outputs.repo_name }}
+          TARGET_OWNER: ${{ needs.request.outputs.target_owner }}
+        run: |
           set +e
           RESPONSE="$(gh api "repos/$TARGET_OWNER/$REPO_NAME" 2>&1)"
           STATUS=$?
@@ -135,20 +174,15 @@ jobs:
           fi
 
           echo "Target $TARGET_OWNER/$REPO_NAME exists: $EXISTS"
-
-          {
-            echo "target_owner=$TARGET_OWNER"
-            echo "exists=$EXISTS"
-            echo "repo_url=https://github.com/$TARGET_OWNER/$REPO_NAME"
-          } >> "$GITHUB_OUTPUT"
+          echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
 
       - name: Comment that the repository already exists
         if: steps.target.outputs.exists == 'true'
         uses: actions/github-script@v7
         env:
-          REPO_NAME: ${{ steps.request.outputs.repo_name }}
-          TARGET_OWNER: ${{ steps.target.outputs.target_owner }}
-          REPO_URL: ${{ steps.target.outputs.repo_url }}
+          REPO_NAME: ${{ needs.request.outputs.repo_name }}
+          TARGET_OWNER: ${{ needs.request.outputs.target_owner }}
+          REPO_URL: ${{ needs.request.outputs.repo_url }}
         with:
           script: |
             const { REPO_NAME, TARGET_OWNER, REPO_URL } = process.env;
@@ -168,9 +202,9 @@ jobs:
                 '',
                 '**To continue, do one of the following:**',
                 '',
-                `1. Edit this issue with a different **Repository Name**, then re-apply the \`repo-request\` label.`,
+                '1. Edit this issue with a different **Repository Name**, then remove the `repo-request` label and add it again.',
                 `2. If \`${REPO_NAME}\` is already your project, no action is needed — use the existing repository.`,
-                `3. If the existing repository is unwanted, ask an owner of \`${TARGET_OWNER}\` to delete or rename it, then re-apply the label.`,
+                `3. If the existing repository is unwanted, ask an owner of \`${TARGET_OWNER}\` to delete or rename it, then remove and re-add the label.`,
                 '',
                 `[View workflow run](${runUrl})`,
               ].join('\n'),
@@ -183,35 +217,41 @@ jobs:
           exit 1
 
       # ------------------------------------------------------------------ #
-      #  5. Create the new repository                                       #
+      #  6. Create the new repository                                       #
       # ------------------------------------------------------------------ #
       - name: Create repository
         id: create
         env:
           GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
-          REPO_NAME: ${{ steps.request.outputs.repo_name }}
-          TARGET_OWNER: ${{ steps.target.outputs.target_owner }}
-          DESCRIPTION: ${{ steps.request.outputs.description }}
+          REPO_NAME: ${{ needs.request.outputs.repo_name }}
+          TARGET_OWNER: ${{ needs.request.outputs.target_owner }}
+          DESCRIPTION: ${{ needs.request.outputs.description }}
         run: |
           gh repo create "$TARGET_OWNER/$REPO_NAME" \
             --private \
             --description "$DESCRIPTION"
 
       # ------------------------------------------------------------------ #
-      #  6. Push scaffold template                                          #
+      #  7. Push scaffold template                                          #
       # ------------------------------------------------------------------ #
       - name: Push scaffold template
+        id: scaffold
         env:
           GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
-          REPO_NAME: ${{ steps.request.outputs.repo_name }}
-          TARGET_OWNER: ${{ steps.target.outputs.target_owner }}
-          APP_TYPE: ${{ steps.request.outputs.app_type }}
+          REPO_NAME: ${{ needs.request.outputs.repo_name }}
+          TARGET_OWNER: ${{ needs.request.outputs.target_owner }}
+          APP_TYPE: ${{ needs.request.outputs.app_type }}
         run: |
-          # Clone the newly created empty repo
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
 
           git clone "https://x-access-token:${GH_TOKEN}@github.com/$TARGET_OWNER/$REPO_NAME.git" new-repo
+
+          # Refuse to scaffold over existing commits, so a retry can never overwrite content.
+          if git -C new-repo rev-parse --verify HEAD >/dev/null 2>&1; then
+            echo "::error::$TARGET_OWNER/$REPO_NAME already has commits. Refusing to overwrite it."
+            exit 1
+          fi
 
           # Render into a staging directory so the scaffold transformation never walks .git
           bash capstone/scripts/render-template.sh "$APP_TYPE" "$REPO_NAME" scaffold
@@ -223,15 +263,16 @@ jobs:
           git push origin HEAD:main
 
       # ------------------------------------------------------------------ #
-      #  7. Assign team permissions                                         #
+      #  8. Assign team permissions                                         #
       # ------------------------------------------------------------------ #
       - name: Assign team permissions
-        if: steps.request.outputs.owner_type == 'organization'
+        id: permissions
+        if: needs.request.outputs.owner_type == 'organization'
         env:
           GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
-          REPO_NAME: ${{ steps.request.outputs.repo_name }}
-          ORGANIZATION: ${{ steps.request.outputs.organization }}
-          PERMISSIONS_JSON: ${{ steps.request.outputs.permissions }}
+          REPO_NAME: ${{ needs.request.outputs.repo_name }}
+          ORGANIZATION: ${{ needs.request.outputs.organization }}
+          PERMISSIONS_JSON: ${{ needs.request.outputs.permissions }}
         run: |
           # Groups are allow-listed during validation, so every entry maps to a permission.
           echo "$PERMISSIONS_JSON" | jq -c '.[]' | while read -r entry; do
@@ -248,18 +289,42 @@ jobs:
           done
 
       # ------------------------------------------------------------------ #
-      #  8. Comment success and close the issue                             #
+      #  9. Report outcome                                                  #
       # ------------------------------------------------------------------ #
+      - name: Publish stage summary
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          REPO_NAME: ${{ needs.request.outputs.repo_name }}
+          TARGET_OWNER: ${{ needs.request.outputs.target_owner }}
+          CREATE_RESULT: ${{ steps.create.conclusion }}
+          SCAFFOLD_RESULT: ${{ steps.scaffold.conclusion }}
+          PERMISSIONS_RESULT: ${{ steps.permissions.conclusion }}
+        with:
+          script: |
+            const { REPO_NAME, TARGET_OWNER } = process.env;
+
+            core.summary
+              .addHeading('Provisioning stages', 3)
+              .addRaw(`Target: ${TARGET_OWNER}/${REPO_NAME}`)
+              .addTable([
+                [{ data: 'Stage', header: true }, { data: 'Result', header: true }],
+                ['Create repository', process.env.CREATE_RESULT || 'not reached'],
+                ['Push scaffold', process.env.SCAFFOLD_RESULT || 'not reached'],
+                ['Assign permissions', process.env.PERMISSIONS_RESULT || 'not reached'],
+              ]);
+            await core.summary.write();
+
       - name: Comment success and close issue
         if: success()
         uses: actions/github-script@v7
         env:
-          REPO_URL: ${{ steps.target.outputs.repo_url }}
-          REPO_NAME: ${{ steps.request.outputs.repo_name }}
-          TARGET_OWNER: ${{ steps.target.outputs.target_owner }}
-          OWNER_TYPE: ${{ steps.request.outputs.owner_type }}
-          APP_TYPE: ${{ steps.request.outputs.app_type }}
-          PERMISSION_GROUPS: ${{ steps.request.outputs.groups }}
+          REPO_URL: ${{ needs.request.outputs.repo_url }}
+          REPO_NAME: ${{ needs.request.outputs.repo_name }}
+          TARGET_OWNER: ${{ needs.request.outputs.target_owner }}
+          OWNER_TYPE: ${{ needs.request.outputs.owner_type }}
+          APP_TYPE: ${{ needs.request.outputs.app_type }}
+          PERMISSION_GROUPS: ${{ needs.request.outputs.groups }}
         with:
           script: |
             const {
@@ -296,15 +361,44 @@ jobs:
               state: 'closed'
             });
 
-      # ------------------------------------------------------------------ #
-      #  9. Comment failure                                                 #
-      # ------------------------------------------------------------------ #
       - name: Comment failure
-        if: failure() && steps.request.outputs.valid != 'false' && steps.target.outputs.exists != 'true'
+        if: failure() && steps.target.outputs.exists != 'true'
         uses: actions/github-script@v7
+        env:
+          REPO_NAME: ${{ needs.request.outputs.repo_name }}
+          TARGET_OWNER: ${{ needs.request.outputs.target_owner }}
+          REPO_URL: ${{ needs.request.outputs.repo_url }}
+          CREATE_RESULT: ${{ steps.create.conclusion }}
+          SCAFFOLD_RESULT: ${{ steps.scaffold.conclusion }}
+          PERMISSIONS_RESULT: ${{ steps.permissions.conclusion }}
         with:
           script: |
+            const {
+              REPO_NAME, TARGET_OWNER, REPO_URL,
+              CREATE_RESULT, SCAFFOLD_RESULT, PERMISSIONS_RESULT,
+            } = process.env;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            const label = (result) => ({
+              success: '✅ completed',
+              failure: '❌ failed',
+              skipped: '⏭️ not reached',
+            }[result] || '⏭️ not reached');
+
+            const created = CREATE_RESULT === 'success';
+            const nextAction = created
+              ? [
+                  `\`${TARGET_OWNER}/${REPO_NAME}\` was created, but provisioning did not finish: ${REPO_URL}`,
+                  '',
+                  'Re-labelling alone will not fix this, because a request is rejected when the target',
+                  'already exists. An operator must either delete the repository and then remove and',
+                  're-add the `repo-request` label, or finish the remaining stages by hand.',
+                ].join('\n')
+              : [
+                  'No repository was created, so nothing needs cleaning up.',
+                  '',
+                  'To retry, remove the `repo-request` label and add it again.',
+                ].join('\n');
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -313,8 +407,15 @@ jobs:
               body: [
                 '## ❌ Repository Creation Failed',
                 '',
-                'The request passed validation but the pipeline failed while provisioning.',
-                'The repository may have been partially created, so check before retrying.',
+                'The request was valid, but provisioning did not complete.',
+                '',
+                '| Stage | Result |',
+                '|-------|--------|',
+                `| Create repository | ${label(CREATE_RESULT)} |`,
+                `| Push scaffold | ${label(SCAFFOLD_RESULT)} |`,
+                `| Assign permissions | ${label(PERMISSIONS_RESULT)} |`,
+                '',
+                nextAction,
                 '',
                 `[View workflow run](${runUrl})`,
               ].join('\n'),

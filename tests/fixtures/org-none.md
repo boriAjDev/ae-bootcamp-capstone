@@ -4,7 +4,7 @@ my-personal-app
 
 ### Organization
 
-None
+n/a
 
 ### Application Type
 

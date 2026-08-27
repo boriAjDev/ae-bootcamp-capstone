@@ -21,6 +21,7 @@ This backlog implements [risk-remediation-plan.md](risk-remediation-plan.md). Ta
 
 - [x] **T1.0 Replace free-text organization input with a controlled dropdown.** Update the repository request issue form so the organization field offers exactly `BoriOrg`, `MCO-Test-Org`, `Slalom`, and `None`.
   - Acceptance: requesters cannot enter an arbitrary organization value, the rendered field remains parseable by the workflow, and the selected value is normalized consistently.
+  - Correction: GitHub rejects `None` as a dropdown option because it is a reserved word. The no-organization choice is `n/a`, and `NO_ORGANIZATION` in `validate-request.js` matches it case-insensitively.
 - [x] **T1.0a Define and implement the `None` provisioning path.** When `None` is selected, do not associate the new repository with an organization or assign organization teams. Resolve and document the personal owner/account under which GitHub will create the repository, since a repository must still have an owner.
   - Acceptance: a `None` request creates the repository under the approved non-organization owner, makes no organization repository API call, skips team assignment, and reports the actual owner and skipped permissions in the issue comment.
   - Decision: the owner is the account that owns `REPO_CREATION_TOKEN`, resolved at run time via `gh api user`. This keeps the owner truthful without a second credential, and the success comment always names it. Revisit if the token becomes a GitHub App (T1.6), since apps have no user account.
@@ -54,17 +55,21 @@ This backlog implements [risk-remediation-plan.md](risk-remediation-plan.md). Ta
   - Acceptance: the policy covers empty repositories, repositories with a scaffold, and repositories with unrelated content.
   - Decision: **reject**. The workflow checks for the target before creating anything and stops if it exists, regardless of whether that repository is empty, already scaffolded, or holds unrelated content. Reuse was rejected because pushing a scaffold into an existing repository can overwrite real work. Documented under "If the repository already exists" in the README.
   - The check distinguishes a 404 from a permissions or transport error, so an unreachable API fails the run instead of being read as "name is free".
-- [ ] **T2.2 Add concurrency protection.** Serialize runs by request identity and target organization/repository name.
+- [x] **T2.2 Add concurrency protection.** Serialize runs by request identity and target organization/repository name.
   - Acceptance: simultaneous labels cannot provision the same target twice.
-  - Partial: the job now has a concurrency group keyed on the issue number, so re-labelling one issue cannot run twice concurrently. Two different issues requesting the same target can still race, which needs the target-keyed grouping described in the task.
-- [ ] **T2.3 Separate create, scaffold, and permissions status.** Persist or report which stages completed so partial runs are diagnosable.
+  - Status: the workflow is split into a `request` job and a `provision` job. `provision` uses a concurrency group keyed on the resolved `owner/name` from `needs.request.outputs`, so two different issues requesting the same target are serialized and the second is rejected by the existence check.
+- [x] **T2.3 Separate create, scaffold, and permissions status.** Persist or report which stages completed so partial runs are diagnosable.
   - Acceptance: a failure identifies the completed stage and the safe next action.
-- [ ] **T2.4 Make scaffold push retryable.** Avoid destructive copying and ensure a retry cannot overwrite unrelated repository content.
+  - Status: the create, scaffold, and permissions steps have ids, and both the job summary and the failure comment render a per-stage table from `steps.<id>.conclusion`. The comment then states the safe next action, which differs depending on whether the repository was created.
+- [x] **T2.4 Make scaffold push retryable.** Avoid destructive copying and ensure a retry cannot overwrite unrelated repository content.
   - Acceptance: a retry against a partially initialized repository follows the chosen policy.
-- [ ] **T2.5 Define label and retry behavior.** Decide whether invalid issues are edited and relabeled, reopened, or handled by a separate retry label/event.
+  - Status: the scaffold step aborts if the cloned repository already has commits, and the push is never forced. Combined with the T2.1 reject policy, a scaffold can only ever land in a repository this workflow just created and left empty.
+- [x] **T2.5 Define label and retry behavior.** Decide whether invalid issues are edited and relabeled, reopened, or handled by a separate retry label/event.
   - Acceptance: the failure comment tells the requester exactly how to retry.
-- [ ] **T2.6 Add cleanup or repair guidance.** Document what happens when repository creation succeeds but scaffold push or permissions fail.
+  - Decision: retry by removing the `repo-request` label and adding it again. Re-applying a label that is already present raises no `labeled` event, so every failure comment now says to remove and re-add rather than "re-apply".
+- [x] **T2.6 Add cleanup or repair guidance.** Document what happens when repository creation succeeds but scaffold push or permissions fail.
   - Acceptance: operators have a runbook for each partial-failure state.
+  - Status: "Retrying a Request" and "Recovering from a Partial Failure" in the README cover each state, including the case where the repository exists and re-labelling would be rejected.
 
 ## 3. Permission correctness
 
