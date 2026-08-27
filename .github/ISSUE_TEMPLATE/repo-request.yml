@@ -19,12 +19,16 @@ body:
     validations:
       required: true
 
-  - type: input
+  - type: dropdown
     id: repo_org
     attributes:
       label: "Organization"
-      description: "The GitHub organization where the repository should be created"
-      placeholder: "my-org"
+      description: "The GitHub organization where the repository should be created. Choose None to create it outside any organization; permission groups are not applied in that case."
+      options:
+        - BoriOrg
+        - MCO-Test-Org
+        - Slalom
+        - None
     validations:
       required: true
 

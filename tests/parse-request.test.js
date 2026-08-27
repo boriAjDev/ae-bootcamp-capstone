@@ -112,6 +112,26 @@ const cases = [
       description: 'Description followed by an unexpected section.',
     },
   },
+  {
+    name: 'hash-in-description',
+    expected: {
+      repoName: 'my-new-app',
+      repoOrg: 'BoriOrg',
+      appType: 'python',
+      groups: ['engineers'],
+      description: 'Tracks work for issue #42 and the #platform channel.',
+    },
+  },
+  {
+    name: 'unknown-groups',
+    expected: {
+      repoName: 'my-new-app',
+      repoOrg: 'BoriOrg',
+      appType: 'python',
+      groups: ['devops', 'security', 'data-platform'],
+      description: 'Requests groups that are not in the permission mapping.',
+    },
+  },
 ];
 
 for (const { name, expected } of cases) {
@@ -151,17 +171,21 @@ test('issue form still uses the headings the parser depends on', () => {
   }
 });
 
-// Known defects captured before Phase 1 changes them. These assertions must be
-// updated by T1.4 (group allow-list) and T1.7 (safe parsing).
-test('KNOWN DEFECT (T1.7): a "#" in the description drops the whole field', () => {
+// Regression cover for the defects that fixture-driven testing exposed in Phase 0.
+test('keeps a description containing "#" intact', () => {
   const parsed = parseRequest(loadFixture('hash-in-description'));
 
-  assert.strictEqual(parsed.repoName, 'my-new-app');
-  assert.strictEqual(parsed.description, '');
+  assert.strictEqual(parsed.description, 'Tracks work for issue #42 and the #platform channel.');
 });
 
-test('KNOWN DEFECT (T1.4): unknown and hyphenated groups are accepted and truncated', () => {
+test('keeps hyphenated checkbox labels intact', () => {
   const parsed = parseRequest(loadFixture('unknown-groups'));
 
-  assert.deepStrictEqual(parsed.groups, ['devops', 'security', 'data']);
+  assert.deepStrictEqual(parsed.groups, ['devops', 'security', 'data-platform']);
+});
+
+test('treats the GitHub "_No response_" placeholder as empty', () => {
+  const body = ['### Repository Name', '', '_No response_', ''].join('\n');
+
+  assert.strictEqual(parseRequest(body).repoName, '');
 });

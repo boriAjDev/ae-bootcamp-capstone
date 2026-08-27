@@ -70,6 +70,10 @@ actionlint's shellcheck integration (SC2128) is what surfaced this, which is why
 
 ---
 
+**Never interpolate `${{ }}` into an `actions/github-script` body.** The script is assembled as JavaScript source, so any issue-supplied value lands inside a template literal and can execute. Pass values through the step's `env:` block and read `process.env` instead. The workflow previously did this with the parsed application type, inside a job holding a `repo`/`admin:org` token.
+
+**Validation belongs in `scripts/validate-request.js`, not in shell.** It defines the request schema (approved organizations, app types, group allow-list and permission mapping, name pattern, and the 350-character description limit that matches GitHub's own) and is unit tested. `parseRequest` extracts fields, `validateRequest` decides whether provisioning may proceed and returns the normalized request.
+
 ## Secret Requirements
 
 The workflow requires the following repository secrets:

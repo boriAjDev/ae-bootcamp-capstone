@@ -19,26 +19,33 @@ This backlog implements [risk-remediation-plan.md](risk-remediation-plan.md). Ta
 
 ## 1. Request validation and authorization
 
-- [ ] **T1.0 Replace free-text organization input with a controlled dropdown.** Update the repository request issue form so the organization field offers exactly `BoriOrg`, `MCO-Test-Org`, `Slalom`, and `None`.
+- [x] **T1.0 Replace free-text organization input with a controlled dropdown.** Update the repository request issue form so the organization field offers exactly `BoriOrg`, `MCO-Test-Org`, `Slalom`, and `None`.
   - Acceptance: requesters cannot enter an arbitrary organization value, the rendered field remains parseable by the workflow, and the selected value is normalized consistently.
-- [ ] **T1.0a Define and implement the `None` provisioning path.** When `None` is selected, do not associate the new repository with an organization or assign organization teams. Resolve and document the personal owner/account under which GitHub will create the repository, since a repository must still have an owner.
+- [x] **T1.0a Define and implement the `None` provisioning path.** When `None` is selected, do not associate the new repository with an organization or assign organization teams. Resolve and document the personal owner/account under which GitHub will create the repository, since a repository must still have an owner.
   - Acceptance: a `None` request creates the repository under the approved non-organization owner, makes no organization repository API call, skips team assignment, and reports the actual owner and skipped permissions in the issue comment.
-- [ ] **T1.0b Test organization selection branches.** Add fixtures and workflow tests for each approved organization and for `None`, including assertions that `None` cannot fall through to an organization URL or team-assignment loop.
+  - Decision: the owner is the account that owns `REPO_CREATION_TOKEN`, resolved at run time via `gh api user`. This keeps the owner truthful without a second credential, and the success comment always names it. Revisit if the token becomes a GitHub App (T1.6), since apps have no user account.
+- [x] **T1.0b Test organization selection branches.** Add fixtures and workflow tests for each approved organization and for `None`, including assertions that `None` cannot fall through to an organization URL or team-assignment loop.
   - Acceptance: all four dropdown values have an expected target-owner and permission behavior, and an invalid or manually injected value is rejected before repository creation.
-- [ ] **T1.1 Define a request schema.** Specify allowed characters, length limits, required fields, normalized casing, and maximum description length.
+  - Status: covered in `tests/validate-request.test.js`, including the `org-injected` fixture. Team assignment is gated on `owner_type == 'organization'` in the workflow.
+- [x] **T1.1 Define a request schema.** Specify allowed characters, length limits, required fields, normalized casing, and maximum description length.
   - Acceptance: the schema is documented and used by validation tests.
-- [ ] **T1.2 Fix repository-name edge cases.** Permit or explicitly reject one-character names, and test the intended rule for leading/trailing hyphens.
+  - Status: implemented in `scripts/validate-request.js` and documented under "Request Schema" in the README.
+- [x] **T1.2 Fix repository-name edge cases.** Permit or explicitly reject one-character names, and test the intended rule for leading/trailing hyphens.
   - Acceptance: validation behavior is deliberate and covered by fixtures.
-- [ ] **T1.3 Validate the description.** Reject missing or whitespace-only descriptions and enforce a documented size limit.
+  - Decision: one-character names are permitted. Leading and trailing hyphens are rejected.
+- [x] **T1.3 Validate the description.** Reject missing or whitespace-only descriptions and enforce a documented size limit.
   - Acceptance: repository creation is never attempted for an invalid description.
-- [ ] **T1.4 Validate groups against an allow-list.** Reject unknown groups instead of silently skipping them; normalize checkbox values once.
+  - Decision: limit is 350 characters, matching GitHub's own repository description limit.
+- [x] **T1.4 Validate groups against an allow-list.** Reject unknown groups instead of silently skipping them; normalize checkbox values once.
   - Acceptance: every accepted group has a permission mapping.
-- [ ] **T1.5 Restrict target organizations.** Implement an explicit organization allow-list or an equivalent approval lookup before repository creation.
+- [x] **T1.5 Restrict target organizations.** Implement an explicit organization allow-list or an equivalent approval lookup before repository creation.
   - Acceptance: an unapproved organization receives a clear issue comment and no repository API call occurs.
 - [ ] **T1.6 Review credential permissions.** Replace the broad PAT where practical with a GitHub App or fine-grained credential limited to approved organizations and required operations.
   - Acceptance: the credential policy is documented, tested in a non-production organization, and has an owner and rotation procedure.
-- [ ] **T1.7 Make parsing safe.** Replace fragile section matching with a parser that handles user text containing `#`, quotes, and multiline content without changing field boundaries.
+  - Blocked: needs a decision on which credential model is available.
+- [x] **T1.7 Make parsing safe.** Replace fragile section matching with a parser that handles user text containing `#`, quotes, and multiline content without changing field boundaries.
   - Acceptance: special-character fixtures parse correctly and cannot alter workflow commands.
+  - Status: the parser now splits on heading lines instead of matching `[^#]`. Separately, all `${{ }}` interpolation was removed from `actions/github-script` bodies and replaced with `env`, closing a script-injection path.
 
 ## 2. Idempotency, concurrency, and recovery
 
@@ -116,3 +123,11 @@ Record implementation PRs, test runs, policy decisions, and dry-run results here
 - Open Phase 0 items: none.
 - The first CI run failed the lint job, which caught a latent production bug: the workflow passed permission groups through an env var named `GROUPS`, which bash overwrites with its built-in group-ID array. Team assignment therefore never matched a real team and the empty-group validation could never fire, yet runs still reported success. Renamed to `PERMISSION_GROUPS`, plus quoting and redirect-grouping fixes. Verified locally with actionlint 1.7.7 and shellcheck 0.10.0: 0 errors across both workflows.
 - Deferred by design: hyphenated repository names still produce invalid C# identifiers (`namespace my-new-app.Tests`). CI uses `sampleapp` until the T4.1 naming policy is decided; T4.4 adds hyphen and shortest-name coverage.
+
+### Phase 1 (T1.6 outstanding)
+
+- Validation moved out of shell and into `scripts/validate-request.js`, so every rule is unit tested. `node --test tests/` covers 39 tests across parsing and validation.
+- The parser now splits the issue body on heading lines, so `#`, quotes, and multiline descriptions are preserved. The Phase 0 fixtures that pinned those defects now assert correct behavior.
+- Closed a script-injection path: `actions/github-script` steps no longer interpolate `${{ }}` into script bodies. Attacker-controlled values arrive via `env` and are read from `process.env`. Verified by scanning the workflow for interpolations outside `env:` blocks.
+- Organization is now a dropdown, and the workflow branches on owner type. Team assignment is skipped entirely for `None`.
+- Also removed the deprecated `gh repo create --confirm` flag.
