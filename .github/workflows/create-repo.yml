@@ -52,7 +52,8 @@ jobs:
           REPO_NAME: ${{ steps.parse.outputs.repo_name }}
           REPO_ORG: ${{ steps.parse.outputs.repo_org }}
           APP_TYPE: ${{ steps.parse.outputs.app_type }}
-          GROUPS: ${{ steps.parse.outputs.groups }}
+          # Must not be named GROUPS: bash overwrites that name with its built-in array.
+          PERMISSION_GROUPS: ${{ steps.parse.outputs.groups }}
         run: |
 
           ERRORS=""
@@ -71,18 +72,20 @@ jobs:
             ERRORS="$ERRORS\n- Application Type must be one of: dotnet, java, python. Got: '$APP_TYPE'."
           fi
 
-          if [ -z "$GROUPS" ]; then
+          if [ -z "$PERMISSION_GROUPS" ]; then
             ERRORS="$ERRORS\n- At least one Permission Group must be selected."
           fi
 
           if [ -n "$ERRORS" ]; then
-            echo "VALIDATION_ERRORS<<EOF" >> $GITHUB_OUTPUT
-            printf "%b" "$ERRORS" >> $GITHUB_OUTPUT
-            echo "" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
-            echo "valid=false" >> $GITHUB_OUTPUT
+            {
+              echo "VALIDATION_ERRORS<<EOF"
+              printf "%b" "$ERRORS"
+              echo ""
+              echo "EOF"
+              echo "valid=false"
+            } >> "$GITHUB_OUTPUT"
           else
-            echo "valid=true" >> $GITHUB_OUTPUT
+            echo "valid=true" >> "$GITHUB_OUTPUT"
           fi
 
       # ------------------------------------------------------------------ #
@@ -116,13 +119,14 @@ jobs:
           REPO_ORG: ${{ steps.parse.outputs.repo_org }}
           DESCRIPTION: ${{ steps.parse.outputs.description }}
         run: |
+          # shellcheck disable=SC2153 # REPO_ORG is supplied by the step env block above.
           gh repo create "$REPO_ORG/$REPO_NAME" \
             --private \
             --description "$DESCRIPTION" \
             --confirm
 
           REPO_URL="https://github.com/$REPO_ORG/$REPO_NAME"
-          echo "repo_url=$REPO_URL" >> $GITHUB_OUTPUT
+          echo "repo_url=$REPO_URL" >> "$GITHUB_OUTPUT"
 
       # ------------------------------------------------------------------ #
       #  6. Push scaffold template                                         #
@@ -157,7 +161,8 @@ jobs:
           GH_TOKEN: ${{ secrets.REPO_CREATION_TOKEN }}
           REPO_NAME: ${{ steps.parse.outputs.repo_name }}
           REPO_ORG: ${{ steps.parse.outputs.repo_org }}
-          GROUPS: ${{ steps.parse.outputs.groups }}
+          # Must not be named GROUPS: bash overwrites that name with its built-in array.
+          PERMISSION_GROUPS: ${{ steps.parse.outputs.groups }}
         run: |
           declare -A PERM_MAP
           PERM_MAP["devops"]="maintain"
@@ -165,7 +170,7 @@ jobs:
           PERM_MAP["admins"]="admin"
           PERM_MAP["qa"]="pull"
 
-          IFS=',' read -ra GROUP_LIST <<< "$GROUPS"
+          IFS=',' read -ra GROUP_LIST <<< "$PERMISSION_GROUPS"
           for GROUP in "${GROUP_LIST[@]}"; do
             PERMISSION="${PERM_MAP[$GROUP]}"
             if [ -z "$PERMISSION" ]; then

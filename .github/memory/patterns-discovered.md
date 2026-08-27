@@ -64,6 +64,10 @@ The extraction regex is `### <Label>\s+([^#]+?)(?=\n###|$)`. Checkbox groups are
 
 Teams must already exist in the target organization. The workflow skips team assignment silently if the team does not exist.
 
+**Never name a workflow env var `GROUPS`.** `GROUPS` is a built-in bash array holding the current user's group IDs, and bash overwrites any inherited value, so `GROUPS: ${{ steps.parse.outputs.groups }}` arrived in the script as a number like `4096`. This silently broke two things: the "at least one Permission Group" check could never fire, and the assignment loop looked up a numeric group that matched no team, so it warned and skipped while the run still reported success. The variable is now `PERMISSION_GROUPS`. Verify with `GROUPS=a,b bash -c 'echo $GROUPS'`.
+
+actionlint's shellcheck integration (SC2128) is what surfaced this, which is why the lint job must stay green rather than be downgraded to a warning.
+
 ---
 
 ## Secret Requirements
