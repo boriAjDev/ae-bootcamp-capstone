@@ -119,3 +119,25 @@ Start with T0.1-T0.4: add workflow validation, fixture the parser behavior, add 
 - `node --test tests/`: 39 passed, 0 failed.
 - actionlint 1.7.7 with shellcheck 0.10.0: 0 errors.
 - Confirmed against GitHub's form schema docs that `checkboxes` supports `validations.required`, and that `None` is only disallowed as a dropdown option when a `default` index is set.
+
+---
+
+## Session 6 — Phase 2 Idempotency and Recovery
+
+**Date**: 2026-08-27
+**Summary**: Implemented T2.1-T2.6. The workflow is now two jobs and every failure states what was created and how to proceed.
+
+### Decisions
+- **Existing repository: reject.** Never reuse, because pushing a scaffold into an existing repository can overwrite real work. Applies equally to empty, scaffolded, and unrelated repositories.
+- **Retry: remove the label and add it again.** Re-applying an already-present label raises no `labeled` event, so wording that said "re-apply" was wrong and has been corrected everywhere.
+
+### Structure
+`create-repo.yml` is now a `request` job (parse, validate, resolve target owner) and a `provision` job. `provision` keys its concurrency group on the resolved `owner/name` from `needs.request.outputs`, which is what makes the reject policy hold when two issues request the same target. Job-level `concurrency` can read `needs`, but not step outputs, which is why the split was necessary.
+
+### Safety properties added
+- The existence check separates HTTP 404 from permission and transport errors, so an unreachable API never reads as "name is free".
+- The scaffold step aborts if the cloned repository already has commits, and never force-pushes.
+- Create, scaffold, and permissions steps carry ids; the failure comment and job summary render `steps.<id>.conclusion` per stage, and the recommended next action differs depending on whether the repository already exists.
+
+### Still open
+Team assignment still swallows individual failures with `|| echo Warning`, so a run can report success when a team was not assigned. That is T3.2 and is deliberately untouched here.

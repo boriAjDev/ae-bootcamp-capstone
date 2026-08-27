@@ -82,7 +82,7 @@ test(`${NO_ORGANIZATION} resolves to a user owner and assigns no teams`, () => {
 });
 
 test(`${NO_ORGANIZATION} does not require permission groups`, () => {
-  const result = validateRequest(request({ repoOrg: 'None', groups: [] }));
+  const result = validateRequest(request({ repoOrg: 'n/a', groups: [] }));
 
   assert.strictEqual(result.valid, true, errorText(result));
 });

@@ -23,12 +23,12 @@ body:
     id: repo_org
     attributes:
       label: "Organization"
-      description: "The GitHub organization where the repository should be created. Choose None to create it outside any organization; permission groups are not applied in that case."
+      description: "The GitHub organization where the repository should be created. Choose n/a to create it outside any organization; permission groups are not applied in that case."
       options:
         - BoriOrg
         - MCO-Test-Org
         - Slalom
-        - None
+        - n/a
     validations:
       required: true
 
@@ -48,7 +48,7 @@ body:
     id: groups
     attributes:
       label: "Permission Groups"
-      description: "Select the groups that need access to this repository. Select at least one, unless Organization is None."
+      description: "Select the groups that need access to this repository. Select at least one, unless Organization is n/a."
       options:
         - label: devops
         - label: engineers

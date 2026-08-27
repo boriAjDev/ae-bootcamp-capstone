@@ -84,6 +84,8 @@ actionlint's shellcheck integration (SC2128) is what surfaced this, which is why
 
 **Creating pull requests from the CLI fails here.** The authenticated account is an Enterprise Managed User, so `gh pr create` returns `Unauthorized: As an Enterprise Managed User, you cannot access this content`. Pull requests must be opened in the browser.
 
+**`None` is a reserved issue-form dropdown option.** GitHub rejects the form with a "reserved word" error, so the no-organization sentinel is `n/a`. `validate-request.js` exports it as `NO_ORGANIZATION`; matching is case-insensitive. Note the CI job only checks that the form is valid YAML, not that it satisfies GitHub's form schema, so this class of error only appears when GitHub renders the template.
+
 ## Secret Requirements
 
 The workflow requires the following repository secrets:
