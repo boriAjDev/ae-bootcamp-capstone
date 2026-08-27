@@ -92,4 +92,6 @@ Start with T0.1-T0.4: add workflow validation, fixture the parser behavior, add 
 ### Verification
 - `node --test tests/`: 14 passed, 0 failed on Node 20.
 - All three templates render cleanly with no `APP_NAME` tokens remaining and with solution/project paths that match real files.
-- Not yet verified: actionlint and the three scaffold build/test jobs, which need the first CI run. No .NET SDK, JDK, or Python 3.11 is available locally.
+- The first CI run failed on lint and exposed a fifth defect: permission groups were passed through an env var named `GROUPS`, which bash overwrites with its built-in group-ID array. Team assignment never matched a real team and the empty-group check could never fire, yet runs still reported success. Renamed to `PERMISSION_GROUPS`.
+- CI run `33107397245` (commit `2d35a3b`) passed all five jobs, so T0.1-T0.4 are verified and Phase 0 is complete.
+- Useful local loop for future workflow edits: download `actionlint` and `shellcheck` binaries to a temp folder and run `actionlint` from the repository root, since Docker is not available on this machine.

@@ -4,18 +4,18 @@ This backlog implements [risk-remediation-plan.md](risk-remediation-plan.md). Ta
 
 ## 0. Baseline and test harness
 
-- [ ] **T0.1 Add workflow linting.** Add action/workflow syntax validation to repository CI and pin or review third-party action versions.
+- [x] **T0.1 Add workflow linting.** Add action/workflow syntax validation to repository CI and pin or review third-party action versions.
   - Acceptance: malformed workflow YAML and invalid action syntax fail CI.
-  - Status: implemented in `.github/workflows/ci.yml` (actionlint pinned to `1.7.7`, issue-form YAML parsed with PyYAML). Awaiting first CI run to confirm the repository passes lint.
+  - Status: `.github/workflows/ci.yml` runs actionlint pinned to `1.7.7` (with shellcheck) and parses every issue form with PyYAML. Verified: the first run failed on real findings, and the job passes after they were fixed.
 - [x] **T0.2 Extract parser behavior into testable code or a fixture-driven script.** Preserve the current issue-form headings as explicit test inputs.
   - Acceptance: valid form output parses into the expected structured request.
   - Status: parser extracted to `scripts/parse-request.js` and consumed by `create-repo.yml`; `tests/parse-request.test.js` passes (14 tests, `node --test tests/`). A test asserts the issue form still contains every heading the parser depends on.
 - [x] **T0.3 Add negative fixtures.** Cover missing fields, empty groups, unknown groups, uppercase values, hyphenated names, single-character names, `#` in descriptions, quotes, multiline descriptions, and unexpected headings.
   - Acceptance: each fixture has an expected parse or validation result.
   - Status: 11 fixtures in `tests/fixtures/`. Two fixtures pin known defects for Phase 1: `#` in a description silently empties the field (T1.7) and unknown/hyphenated groups are accepted and truncated (T1.4).
-- [ ] **T0.4 Add scaffold verification jobs.** Build/test the .NET and Java templates and install/test the Python template using supported tool versions.
+- [x] **T0.4 Add scaffold verification jobs.** Build/test the .NET and Java templates and install/test the Python template using supported tool versions.
   - Acceptance: all three template checks run in CI without modifying the source templates.
-  - Status: jobs added for all three templates; rendering verified locally via `scripts/render-template.sh`. Build/test execution is unverified locally (no .NET SDK, JDK, or Python 3.11 available) and awaits the first CI run.
+  - Status: all three jobs pass in CI. Each renders into `runner.temp` via `scripts/render-template.sh`, so source templates are never modified.
 
 ## 1. Request validation and authorization
 
@@ -102,7 +102,9 @@ This backlog implements [risk-remediation-plan.md](risk-remediation-plan.md). Ta
 
 Record implementation PRs, test runs, policy decisions, and dry-run results here as the backlog is completed. Do not mark a task complete based only on a successful workflow syntax check; behavior must be verified at the narrowest level that exercises the task.
 
-### Phase 0 (in progress)
+### Phase 0 (complete)
+
+- CI run `33107397245` on commit `2d35a3b` passed all five jobs: lint, parser tests, and the .NET, Java, and Python scaffold checks. Phase 0 is verified end to end.
 
 - `node --test tests/` passes with 14 tests on Node 20, covering 11 issue-body fixtures, CRLF handling, empty bodies, and issue-form heading drift.
 - `scripts/render-template.sh` renders all three templates with no `APP_NAME` tokens remaining, verified locally.
@@ -111,6 +113,6 @@ Record implementation PRs, test runs, policy decisions, and dry-run results here
   - `templates/python/pyproject.toml` declared `build-backend = "setuptools.backends.legacy:build"`, which does not exist (`ModuleNotFoundError: No module named 'setuptools.backends'`). Corrected to `setuptools.build_meta`.
   - `templates/dotnet/.../SampleTests.cs` was missing `using Xunit;`, so `[Fact]` and `Assert` could not compile.
   - `templates/dotnet/src/APP_NAME.sln` had no `ProjectConfigurationPlatforms` section, so no project was selected for build.
-- Open Phase 0 items: first CI run must confirm actionlint passes (T0.1) and that the three scaffolds build, test, and install (T0.4).
+- Open Phase 0 items: none.
 - The first CI run failed the lint job, which caught a latent production bug: the workflow passed permission groups through an env var named `GROUPS`, which bash overwrites with its built-in group-ID array. Team assignment therefore never matched a real team and the empty-group validation could never fire, yet runs still reported success. Renamed to `PERMISSION_GROUPS`, plus quoting and redirect-grouping fixes. Verified locally with actionlint 1.7.7 and shellcheck 0.10.0: 0 errors across both workflows.
 - Deferred by design: hyphenated repository names still produce invalid C# identifiers (`namespace my-new-app.Tests`). CI uses `sampleapp` until the T4.1 naming policy is decided; T4.4 adds hyphen and shortest-name coverage.
