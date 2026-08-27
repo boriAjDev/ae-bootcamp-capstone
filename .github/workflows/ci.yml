@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-workflows:
+    name: Lint workflows and issue forms
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate issue form YAML
+        run: |
+          python -m pip install --quiet "PyYAML==6.0.2"
+          python - <<'PY'
+          import pathlib
+          import sys
+          import yaml
+
+          failed = False
+          for path in sorted(pathlib.Path(".github/ISSUE_TEMPLATE").glob("*.yml")):
+              try:
+                  yaml.safe_load(path.read_text(encoding="utf-8"))
+                  print(f"ok: {path}")
+              except yaml.YAMLError as exc:
+                  failed = True
+                  print(f"::error file={path}::invalid YAML: {exc}")
+
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: Run actionlint
+        uses: docker://rhysd/actionlint:1.7.7
+        with:
+          args: -color
+
+  parser-tests:
+    name: Request parser tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run parser fixtures
+        run: node --test tests/
+
+  scaffold-dotnet:
+    name: Verify .NET scaffold
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Render template
+        run: bash scripts/render-template.sh dotnet sampleapp "${{ runner.temp }}/dotnet-app"
+
+      - name: Build and test
+        working-directory: ${{ runner.temp }}/dotnet-app
+        run: |
+          dotnet build src/sampleapp.sln --nologo
+          dotnet test tests/sampleapp.Tests/sampleapp.Tests.csproj --nologo
+
+  scaffold-java:
+    name: Verify Java scaffold
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Render template
+        run: bash scripts/render-template.sh java sampleapp "${{ runner.temp }}/java-app"
+
+      - name: Build and test
+        working-directory: ${{ runner.temp }}/java-app
+        run: mvn -B --no-transfer-progress test
+
+  scaffold-python:
+    name: Verify Python scaffold
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Render template
+        run: bash scripts/render-template.sh python sampleapp "${{ runner.temp }}/python-app"
+
+      - name: Install and test
+        working-directory: ${{ runner.temp }}/python-app
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m pip install .
+          python -m pytest

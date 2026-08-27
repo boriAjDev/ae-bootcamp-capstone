@@ -1,3 +1,5 @@
+using Xunit;
+
 namespace APP_NAME.Tests;
 
 public class SampleTests
